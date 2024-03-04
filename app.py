@@ -1,7 +1,8 @@
 from typing import Union
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
 from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
 
 
 templates = Jinja2Templates(directory="templates")
@@ -9,11 +10,19 @@ app = FastAPI()
 
 @app.get("/")
 async def home(request:Request):
-	return templates.TemplateResponse("index.html", {'request': request})
+	return templates.TemplateResponse("main.html", {'request': request})
 
 @app.get('/login')
 async def login(request:Request):
 	return templates.TemplateResponse('login.html',{'request': request})
+
+@app.get('/mainlogin')
+async def login(request:Request):
+	return templates.TemplateResponse('main_login.html',{'request': request})
+
+@app.post('/login')
+async def login_post(request: Request, email: str = Form(...), password: str = Form(...)):
+    return RedirectResponse(url='/mainlogin', status_code=303)
 
 @app.get('/signup')
 async def signup(request:Request):

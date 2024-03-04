@@ -16,20 +16,15 @@
                 </button>
                 <div class="collapse navbar-collapse" id="navbarSupportedContent">
                     <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-                        <li class="nav-item">
-                            <a class="nav-link" aria-current="page" href="/upload">비디오 업로드</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="/album">Album</a>
-                        </li>
+  
                     </ul>
 
                     <ul class="navbar-nav me-auto me-2 me-lg-0">
                         <li class="nav-item">
-                            <a class="nav-link" aria-current="page" href="#">user@email.com</a>
+                            <a class="nav-link" aria-current="page" href="/login">Log in</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" aria-current="page" href="/">Logout</a>
+                            <a class="nav-link" aria-current="page" href="/signup">Sign up</a>
                         </li>
                     </ul>
 
@@ -39,14 +34,14 @@
 
     <div class="container text-center">
       <div class="row justify-content-center">
-        <form class="row g-3">
+        <form class="row g-3" action="/login" method="post">
             <div class="col--3">
               <label for="inputEmail4" class="form-label">Email</label>
-              <input type="email" class="form-control" id="inputEmail4" placeholder="input email">
+              <input type="email" class="form-control" id="inputEmail4" name="email" placeholder="input email">
             </div>
             <div class="col--3">
               <label for="inputPassword4" class="form-label">Password</label>
-              <input type="password" class="form-control" id="inputPassword4" placeholder="input password">
+              <input type="password" class="form-control" id="inputPassword4" name="password" placeholder="input password">
             </div>
 
             <div class="col-3-12">
