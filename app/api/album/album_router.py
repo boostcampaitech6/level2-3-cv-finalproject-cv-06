@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Form, Request
 from sqlalchemy.orm import Session
 from starlette import status
 
@@ -9,23 +9,39 @@ from models.models import User
 
 from api.user.user_router import get_current_user
 
+from fastapi.templating import Jinja2Templates
+
 router = APIRouter(
     prefix="/album",
 )
 
+templates = Jinja2Templates(directory="templates")
+
 
 @router.get("/")
-def album_list(db: Session = Depends(get_db),
-               current_user: User = Depends(get_current_user)):
+def album_list(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     user_id = current_user.user_id
-    upload_list = crud.get_uploads(
-        db=db, user_id=user_id)
-    
-    return {
-        'user_id': user_id,
-        'total': len(upload_list),
-        'upload_list': upload_list
-    }
+    upload_list = crud.get_uploads(db=db, user_id=user_id)
+
+    return {"user_id": user_id, "total": len(upload_list), "upload_list": upload_list}
+
+
+# @router.post("/{upload_id}")
+@router.post("/album_page")
+def set_interval(request: Request, start: int = Form(...), end: int = Form(...)):
+
+    print(start, end)
+
+    context = {}
+
+    context["request"] = request
+    context["srcinterval"] = (
+        f"http://0.0.0.0:30305/testitems/C_3_13_30_BU_SYA_10-06_15-11-55_CD_RGB_DF2_M3.mp4#t={start},{end}"
+    )
+    print(f"==>> context['srcinterval']: {context['srcinterval']}")
+
+    return templates.TemplateResponse("album_page.html", context)
+
 
 # @router.get("/detail/{upload_id}", response_model=schemas.Upload)
 # def question_detail(upload_id: int, db: Session = Depends(get_db)):
