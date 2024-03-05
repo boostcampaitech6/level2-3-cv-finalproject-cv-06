@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Form, Request
 from sqlalchemy.orm import Session
 from starlette import status
 
-from db.database import get_db
+from core.config import get_settings
+from db.database import get_db, db_engine
+from models import models
 from crud import crud
 from schemas import schemas
 from models.models import User
@@ -31,13 +33,19 @@ def album_list(db: Session = Depends(get_db), current_user: User = Depends(get_c
 def set_interval(request: Request, start: int = Form(...), end: int = Form(...)):
 
     print(start, end)
+    # db = [i for i in get_db()][0]
+    # video = crud.get_video(db, 1)
+    # video_url = video.video_url
+    # print(f"==>> video_url: {video_url}")
 
     context = {}
 
     context["request"] = request
-    context["srcinterval"] = (
-        f"http://0.0.0.0:30305/testitems/C_3_13_30_BU_SYA_10-06_15-11-55_CD_RGB_DF2_M3.mp4#t={start},{end}"
-    )
+    context["start"] = start
+    context["end"] = end
+    context["srcinterval"] = f"/testitems/C_3_13_30_BU_SYA_10-06_15-11-55_CD_RGB_DF2_M3.mp4#t={start},{end}"
+    # context["srcinterval"] = video_url + f"#t={start},{end}"
+
     print(f"==>> context['srcinterval']: {context['srcinterval']}")
 
     return templates.TemplateResponse("album_page.html", context)

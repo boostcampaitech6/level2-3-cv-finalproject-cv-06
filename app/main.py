@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from starlette import status
 
 # from api.album_router import router
-from api import user_router
+from api import user_router, album_router
 
 # from api.video_router import video_router
 # from api.upload_router import upload_router
@@ -19,11 +19,15 @@ from crud.crud import pwd_context
 from core.config import get_settings
 from jose import jwt, JWTError
 
+from fastapi.staticfiles import StaticFiles
+
 templates = Jinja2Templates(directory="templates")
 
 app = FastAPI()
 
 settings = get_settings()
+
+app.mount("/testitems", StaticFiles(directory="testitems"), "testitems")
 
 
 @app.get("/")
@@ -61,6 +65,7 @@ async def main_post(request: Request):
 
 
 app.include_router(user_router.router)
+app.include_router(album_router.router)
 
 # @app.get('/upload')
 # async def upload(request:Request):
@@ -68,9 +73,16 @@ app.include_router(user_router.router)
 
 # app.include_router(upload_router.router)
 
-# @app.get('/album')
-# async def album(request:Request):
-# 	return templates.TemplateResponse('album.html',{'request': request})
+
+@app.get("/album")
+async def album(request: Request):
+    return templates.TemplateResponse("album.html", {"request": request})
+
+
+@app.get("/album/album_page")
+async def album(request: Request):
+    return templates.TemplateResponse("album_page.html", {"request": request})
+
 
 # app.include_router(router.router)
 
