@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from starlette import status
 
 # from api.album_router import router 
-from api import user_router
+from api import user_router, album_router
 # from api.video_router import video_router
 # from api.upload_router import upload_router
 from db.database import get_db, db_engine
@@ -63,11 +63,7 @@ app.include_router(user_router.router)
 
 # app.include_router(upload_router.router)
 
-# @app.get('/album')
-# async def album(request:Request):
-# 	return templates.TemplateResponse('album.html',{'request': request})
-
-# app.include_router(router.router)
+app.include_router(album_router.router)
 
 
 if __name__ == '__main__':
