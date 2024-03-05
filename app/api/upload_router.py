@@ -9,18 +9,18 @@ from schemas import schemas
 from models.models import User
 from core.config import get_settings
 
-from api.user.user_router import get_current_user
+from api.user_router import get_current_user
 import boto3
 
 settings = get_settings()
 
-router = APIRouter(
+upload_router = APIRouter(
     prefix="/upload",
 )
 
 s3 = boto3.client("s3",aws_access_key_id=settings.AWS_ACCESS_KEY ,aws_secret_access_key=settings.AWS_SECRET_KEY)
 
-@router.post("/", status_code=status.HTTP_204_NO_CONTENT)
+@upload_router.post("/", status_code=status.HTTP_204_NO_CONTENT)
 async def upload(name: str = Form(...), video: UploadFile = File(...),
                  date: date = Form(...),
                  is_realtime: bool = Form(...),

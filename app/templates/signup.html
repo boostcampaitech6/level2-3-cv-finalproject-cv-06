@@ -24,14 +24,14 @@
                     </li>
                 </ul>
 
-                <ul class="navbar-nav me-auto me-2 me-lg-0">
+                <!-- <ul class="navbar-nav me-auto me-2 me-lg-0">
                     <li class="nav-item">
                         <a class="nav-link" aria-current="page" href="#">user@email.com</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" aria-current="page" href="/">Logout</a>
                     </li>
-                </ul>
+                </ul> -->
 
             </div>
         </div>
@@ -39,7 +39,7 @@
 
     <div class="container text-center">
         <div class="row justify-content-center">
-    <form class="row g-3" action="/login" method="post">
+    <form class="row g-3" action="/user/login" method="post">
         <div class="col--3">
             <label for="inputEmail4" class="form-label">Email</label>
             <input type="email" class="form-control" id="inputEmail4" placeholder="input email" name="email">
@@ -56,6 +56,9 @@
             <button type="submit" class="btn btn-primary btn-lg">Sign up</button>
         </div>
     </form>
+
+    <a class="col-12 text-black" href="/user/login">Log In</a>
+
     </div>
     </div>
     </body>

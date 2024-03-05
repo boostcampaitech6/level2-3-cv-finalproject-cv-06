@@ -7,7 +7,7 @@ from crud import crud
 from schemas import schemas
 from models.models import User
 
-from api.user.user_router import get_current_user
+from api.user_router import get_current_user
 
 from fastapi.templating import Jinja2Templates
 
