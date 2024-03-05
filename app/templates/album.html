@@ -44,7 +44,7 @@
                   <tr>
                     <th scope="col">#</th>
                     <th scope="col">Name</th>
-                    <th scope="col">User</th>
+                    <th scope="col">Date</th>
                     <th scope="col">Button</th>
                   </tr>
                 </thead>
@@ -53,7 +53,7 @@
                     <tr>
                         <th scope="row">{{ loop.index }}</th>
                         <td>{{ upload.name }}</td>
-                        <td>{{ upload.user_email }}</td>
+                        <td>{{ upload.date }}</td>
                         <td>
                             <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modifyModal">수정</button>
                             <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal">삭제</button>
