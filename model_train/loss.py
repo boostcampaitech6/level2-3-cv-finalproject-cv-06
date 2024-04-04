@@ -53,6 +53,41 @@ def MIL(y_pred, batch_size, feature_length, is_transformer=0):
     return loss
 
 
+def MIL_top3(y_pred, batch_size, feature_length, is_transformer=0):
+    # https://arxiv.org/abs/2002.01132
+    loss = torch.tensor(0.0).cuda()
+    sparsity = torch.tensor(0.0).cuda()
+    smooth = torch.tensor(0.0).cuda()
+    if is_transformer == 0:
+        y_pred = y_pred.view(batch_size, -1)
+        # (30*2*feature_length, 1)을 (30, 2*feature_length)로 다시 변경
+    else:
+        y_pred = torch.sigmoid(y_pred)
+
+    for i in range(batch_size):
+
+        y_anomaly = y_pred[i, :feature_length]
+
+        y_normal = y_pred[i, feature_length:]
+
+        y_anomaly_top3 = torch.topk(y_anomaly, 3)[0]  # anomaly top3
+        y_anomaly_min = torch.min(y_anomaly)
+
+        y_normal_max = torch.max(y_normal)  # normal
+        y_normal_min = torch.min(y_normal)
+
+        loss += F.relu(1.0 - y_anomaly_top3[0] + y_normal_max)
+        loss += F.relu(1.0 - y_anomaly_top3[1] + y_normal_max)
+        loss += F.relu(1.0 - y_anomaly_top3[2] + y_normal_max)
+        loss += F.relu(1.0 - y_anomaly_top3[0] + y_anomaly_min)
+
+        sparsity += torch.sum(y_anomaly) * 0.00008
+        smooth += torch.sum((y_pred[i, : feature_length - 1] - y_pred[i, 1:feature_length]) ** 2) * 0.00008
+    loss = (loss + sparsity + smooth) / batch_size
+
+    return loss
+
+
 class NormalLoss(nn.Module):
     def __init__(self):
         super().__init__()

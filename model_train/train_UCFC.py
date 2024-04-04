@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
+import seaborn as sns
 import matplotlib.pyplot as plt
 
 from datetime import datetime
@@ -26,8 +27,8 @@ from tqdm import tqdm
 import wandb
 
 from shop_dataset import NewNormalVMAE, NewAbnormalVMAE
-from classifier import WSAD, MILClassifier
-from loss import MIL, LossComputer
+from classifier import WSAD, MILClassifier, MILandFE
+from loss import MIL, MIL_top3, LossComputer
 
 
 def parse_args():
@@ -455,6 +456,14 @@ def train_BNWVAD(
                 total_normal_max = 0
                 total_normal_mean = 0
 
+                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                    total_TP = 0
+                    total_FN = 0
+                    total_FP = 0
+                    total_TN = 0
+                    total_preds = []
+                    total_gts = []
+
                 norm_valid_iter = iter(normal_valid_loader)
                 # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
 
@@ -525,8 +534,20 @@ def train_BNWVAD(
                         TP_and_FN = pred_positive[gts_np > 0.9]
                         FP_and_TN = pred_positive[gts_np < 0.1]
 
-                        total_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                        total_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                        num_TP = np.sum(TP_and_FN)
+                        num_FP = np.sum(FP_and_TN)
+
+                        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                            total_TP += num_TP
+                            total_FN += len(TP_and_FN) - num_TP
+                            total_FP += num_FP
+                            total_TN += len(FP_and_TN) - num_FP
+
+                            total_preds.append(pred_np)
+                            total_gts.append(gts_np)
+
+                        total_tpr += num_TP / len(TP_and_FN)
+                        total_fpr += num_FP / len(FP_and_TN)
                         total_bthr += best_thr if diff_idx != 0 else 1
 
                         total_auc += auc
@@ -665,6 +686,46 @@ def train_BNWVAD(
         }
 
         wandb.log(new_wandb_metric_dict)
+
+        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+            fig = plt.figure(figsize=(14, 7))
+            ax = fig.add_subplot(121, aspect=1)
+            sns.heatmap(
+                conf_mtx,
+                xticklabels=["Abnormal", "Normal"],
+                yticklabels=["Abnormal", "Normal"],
+                annot=True,
+                fmt="d",
+                ax=ax,
+            )
+            ax.set_title("Confusion matrix")
+            ax.set_xlabel("Preds")
+            ax.set_ylabel("GTs")
+
+            ax2 = fig.add_subplot(122, aspect=1)
+            total_preds = np.concatenate(total_preds)
+            total_gts = np.concatenate(total_gts)
+
+            fpr, tpr, cut = roc_curve(y_true=total_gts, y_score=total_preds)
+
+            auc = sklearn.metrics.auc(fpr, tpr)
+
+            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
+            ax2.plot([0, 1], [0, 1], linewidth=5)
+
+            ax2.set_xlim([-0.01, 1])
+            ax2.set_ylim([0, 1.01])
+            ax2.legend(loc="lower right")
+            ax2.set_title("ROC curve")
+            ax2.set_ylabel("True Positive Rate")
+            ax2.set_xlabel("False Positive Rate")
+
+            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+            plt.clf()
+            plt.close()
 
         scheduler.step()
 
@@ -824,7 +885,8 @@ def train_MIL(
     print(f"==>> {model_size} data_load_time: {data_load_time}")
 
     # Initialize the model
-    model = MILClassifier(drop_p=0.3)
+    model = MILClassifier(drop_p=0.6)
+    # model = MILandFE(drop_p=0.3)
 
     load_dict = None
 
@@ -851,6 +913,7 @@ def train_MIL(
 
     criterion = nn.BCELoss()
     MIL_criterion = MIL
+    # MIL_criterion = MIL_top3
 
     print(f"Start training..")
 
@@ -997,6 +1060,14 @@ def train_MIL(
                 total_normal_max = 0
                 total_normal_mean = 0
 
+                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                    total_TP = 0
+                    total_FN = 0
+                    total_FP = 0
+                    total_TN = 0
+                    total_preds = []
+                    total_gts = []
+
                 norm_valid_iter = iter(normal_valid_loader)
                 # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
 
@@ -1064,8 +1135,20 @@ def train_MIL(
                         TP_and_FN = pred_positive[gts_np > 0.9]
                         FP_and_TN = pred_positive[gts_np < 0.1]
 
-                        total_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                        total_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                        num_TP = np.sum(TP_and_FN)
+                        num_FP = np.sum(FP_and_TN)
+
+                        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                            total_TP += num_TP
+                            total_FN += len(TP_and_FN) - num_TP
+                            total_FP += num_FP
+                            total_TN += len(FP_and_TN) - num_FP
+
+                            total_preds.append(pred_np)
+                            total_gts.append(gts_np)
+
+                        total_tpr += num_TP / len(TP_and_FN)
+                        total_fpr += num_FP / len(FP_and_TN)
                         total_bthr += best_thr if diff_idx != 0 else 1
 
                         total_auc += auc
@@ -1206,6 +1289,46 @@ def train_MIL(
 
         wandb.log(new_wandb_metric_dict)
 
+        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+            fig = plt.figure(figsize=(14, 7))
+            ax = fig.add_subplot(121, aspect=1)
+            sns.heatmap(
+                conf_mtx,
+                xticklabels=["Abnormal", "Normal"],
+                yticklabels=["Abnormal", "Normal"],
+                annot=True,
+                fmt="d",
+                ax=ax,
+            )
+            ax.set_title("Confusion matrix")
+            ax.set_xlabel("Preds")
+            ax.set_ylabel("GTs")
+
+            ax2 = fig.add_subplot(122, aspect=1)
+            total_preds = np.concatenate(total_preds)
+            total_gts = np.concatenate(total_gts)
+
+            fpr, tpr, cut = roc_curve(y_true=total_gts, y_score=total_preds)
+
+            auc = sklearn.metrics.auc(fpr, tpr)
+
+            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
+            ax2.plot([0, 1], [0, 1], linewidth=5)
+
+            ax2.set_xlim([-0.01, 1])
+            ax2.set_ylim([0, 1.01])
+            ax2.legend(loc="lower right")
+            ax2.set_title("ROC curve")
+            ax2.set_ylabel("True Positive Rate")
+            ax2.set_xlabel("False Positive Rate")
+
+            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+            plt.clf()
+            plt.close()
+
         scheduler.step()
 
         epoch_end = datetime.now()
@@ -1239,9 +1362,9 @@ def train_MIL(
 
 
 def main(args):
-    if (args.wandb_run_name).split("_")[0] == "BNWVAD":
+    if (args.model_name) == "BNWVAD":
         train_BNWVAD(**args.__dict__)
-    else:
+    elif (args.model_name) == "MIL":
         train_MIL(**args.__dict__)
 
 
