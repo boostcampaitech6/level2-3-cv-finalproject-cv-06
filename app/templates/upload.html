@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+
+{% block title %}
+<title>Upload</title>
+{% endblock %}
+
+{% block style %}
+{% endblock %}
+
+{% block header %}
+{{ super() }}
+{% endblock %}
+
+{% block main %}
+<div class="container mt-5">
+    <h2>이상행동을 탐지할 동영상을 업로드 해주세요.</h2>
+    <form id="myForm" class="mt-5" action="/upload" method="post" enctype="multipart/form-data">
+        <div class="mb-3">
+            <label for="storeName" class="form-label fs-4">가게 이름</label>
+            <input type="text" class="form-control" id="storeName" name="name" placeholder="가게 이름을 입력하세요." required>
+        </div>
+        <div class="mb-3">
+            <label for="datetimeInput" class="form-label fs-4">동영상 날짜 및 시간</label>
+            <input type="datetime-local" class="form-control" id="datetimeInput" name="datetime" required>
+        </div>
+        <div>
+            <label for="customRange2" class="form-label fs-4">판단 정도</label>
+            <p class="text-black-50">이상행동 판단 정도입니다. 느슨할수록 정확한 이상행동이 아니더라도 잡아냅니다. 엄격할수록 정확한 이상행동일 때만 잡아냅니다.</p>
+            <input id="customRange2" type="range" class="form-range" min="0" max="0.1" step="0.01" list="tickmarks" name="thr">
+            <div class="d-flex justify-content-between">
+                <p class="text-black-50">느슨하게</p>
+                <p class="text-black-50">보통</p>
+                <p class="text-black-50">엄격하게</p>
+            </div>
+        </div>
+        <div class="mb-3">
+            <label for="file" class="form-label fs-4">파일 선택</label>
+            <input multiple="multiple" type="file" class="form-control" id="file" name="upload_file">
+            {% if err.file_ext %}
+            <p style="color: red;">{{ err.file_ext }}</p>
+            {% endif %}
+        </div>
+        <button type="submit" class="btn btn-primary mt-3" id="liveToastBtn">탐지 시작</button>
+        <div class="position-fixed bottom-0 end-0 p-3">
+            <div id="liveToast" class="toast hide" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="toast-header">
+                    <img src="..." class="rounded me-2" alt="...">
+                    <strong class="me-auto">IVT</strong>
+                    <small>message</small>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+                <div class="toast-body">
+                파일이 제출되었습니다. 잠시후 페이지가 이동합니다.
+                </div>
+            </div>
+        </div>
+    </form>
+    
+</div>
+{% endblock %}    

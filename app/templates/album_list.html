@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+
+{% block title %}
+<title>Album List</title>
+{% endblock %}
+
+{% block header %}
+{{ super() }}
+{% endblock %}
+
+{% block style %}
+{% endblock %}
+
+{% block main %}
+<div class="container text-center">
+    <div class="row justify-content-center">
+        <table class="table">
+            <thead>
+                <tr>
+                <th scope="col">#</th>
+                <th scope="col">이름</th>
+                <th scope="col">날짜&시간</th>
+                <th scope="col">이상탐지</th>
+                <th scope="col">분석 여부</th>
+                <th scope="col">Button</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for upload in album_list %}
+                <tr>
+                    <th scope="row">{{ loop.index }}</th>
+                    <td>
+                        <!-- 클릭 이벤트에 redirectToDetails 함수를 호출하도록 함 -->
+                        <a href="#" onclick="redirectToDetails('{{ upload.user_id }}', '{{ upload.upload_id }}')">
+                            {{ upload.name }}
+                        </a>
+                    </td>
+                    <td>
+                        {{ upload.date }}
+                    </td>
+                    <td>
+                    {% if upload.is_realtime %}
+                        실시간
+                    {% else %}
+                        녹화 영상
+                    {% endif %}
+                    </td>
+                    <td>
+                    {% if upload.completes[0].completed %}
+                        <div style="color: green;">분석 완료</div>
+                    {% else %}
+                        <div style="color: red;">분석중</div>
+                    {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-primary btn-sm edit-btn" data-bs-toggle="modal" data-bs-target="#modifyModal" 
+                                data-uploadid="{{upload.upload_id}}" data-name="{{upload.name}}">수정</button>
+                        <button class="btn btn-primary btn-sm delete-btn" data-bs-toggle="modal" data-bs-target="#deleteModal"
+                                data-uploadid="{{upload.upload_id}}" data-is-real-time="{{upload.is_realtime}}">삭제</button>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="modal fade" id="modifyModal" tabindex="-1" aria-labelledby="modifyModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h1 class="modal-title fs-5" id="modifyModalLabel">Modify</h1>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                변경할 파일 이름을 입력해주세요.
+                <form id="editForm" action="/album" method="post">
+                    <input type="hidden" id="modifyCheckCode" name="check_code" value="edit">
+                    <input type="hidden" id="modifyUploadID" name="upload_id">
+                    <input type="hidden" id="originName" name="origin_name">
+                    <div class="col--3">
+                        <label for="newFileName" class="form-label">파일 이름</label>
+                        <input type="text" class="form-control" id="newFileName" name="new_name" placeholder="변경할 파일명">
+                    </div>
+                    <div class="modal-footer"></div>
+                    <button type="submit" class="btn btn-primary" >변경</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h1 class="modal-title fs-5" id="deleteModalLabel">Delete</h1>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                삭제된 파일은 복구되지 않습니다. 정말 삭제하시겠습니까?
+                <form id="deleteForm" action="/album" method="post">
+                    <input type="hidden" id="deleteCheckCode" name="check_code" value="delete">
+                    <input type="hidden" id="deleteUploadID" name="upload_id">
+                    <input type="hidden" id="isRealTime" name="is_real_time">
+                    <div class="modal-footer"></div>
+                    <button type="submit" class="btn btn-primary" >삭제</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">취소</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script src="/src/album_list.js"> </script>
+{% endblock %}    
+</html>

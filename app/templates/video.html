@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+
+{% block title %}
+<title>Video</title>
+{% endblock %}
+
+{% block style %}
+{{ super() }}
+{% endblock %}
+
+{% block header %}
+{{ super() }}
+{% endblock %}
+
+{% block main %}
+    {% if loading %}
+    <div class="modal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" id="loadingModal">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">모델 분석 중...</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>모델이 분석 중입니다.<br>잠시 기다리시거나 다시 방문해주세요.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" onclick="history.back()">이전 페이지로 돌아가기</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var myModal = new bootstrap.Modal(document.getElementById('loadingModal'));
+            myModal.show();
+        });
+
+        setTimeout('location.reload()', 20000);
+    </script>
+    {% endif %}
+
+    <div class="container-lg text-center py-5">
+        <div class="row justify-content-center">
+            <h3 class="text-start">Video</h3>
+            {% if video_info.is_realtime %}
+            <h6 class="text-start pt-2">실시간 서비스는 스크린샷만 제공됩니다.</h6>
+            {% else %}
+            <video id="vid" class="py-3" width="800" height="600" autoplay controls>
+                <source src={{video_info.video_url}} type="video/mp4"/>
+            </video>
+            {% endif %}
+        </div>
+        <div class="row justify-content-center pt-3">
+            <div class="accordion" id="accordionExample">
+                <div class="accordion-item">
+                    <h2 class="accordion-header">
+                    <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
+                        <strong>비디오 정보</strong>
+                    </button>
+                    </h2>
+                    <div id="collapseOne" class="accordion-collapse collapse" data-bs-parent="#accordionExample">
+                        <div class="accordion-body">
+                            <div class="row">
+                                <div class="d-flex justify-content-center">
+                                    <div class="col m-3">
+                                    <p class="text-start">사용자 ID: {{ video_info.user_id }}</p>
+                                    <p class="text-start">업로드 ID: {{ video_info.upload_id }}</p>
+                                    <p class="text-start">업로드 이름: {{ video_info.upload_name }}</p>
+                                    <p class="text-start">날짜: {{ video_info.date }}</p>
+                                    {% if video_info.is_realtime %}
+                                    <p class="text-start">종류: 실시간 <br>실시간 서비스는 영상을 녹화하지 않습니다. 따라서 앨범에서 전체 영상은 보이지 않습니다.</p>
+                                    {% else %}
+                                    <p class="text-start">종류: 녹화 영상</p>
+                                    {% endif %}
+                                    </div>
+                                    <!-- <div class="col">
+                                        <p class="text-center">score flow<br></p>
+                                        {% if video_info.score_url == "Nothing"%}
+                                        <p class="text-center">이상행동이 탐지되지 않았습니다.</p>
+                                        {% else %}
+                                        <img src={{video_info.score_url}} type="image/png" alt="..." style="width: 100%; height: 300px;" />
+                                        {% endif %}
+                                    </div> -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <hr class="my-4">
+        <div class="container-xl text-center mt-2 py-3">
+            <h3 class="text-start">Screenshot</h3>
+            <div class="row row-cols-2 row-cols-lg-5 g-2 g-lg-3 mt-2" id="screenshotContainer">
+                <!-- 이미지 및 타임스탬프를 동적으로 추가할 자리 -->
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block script %}
+<script>
+    const videoInfo = JSON.parse('{{ video_info | tojson | safe }}');
+    const screenshotContainer = document.getElementById('screenshotContainer');
+</script>
+<script src="/src/video.js"></script>
+{% endblock %}

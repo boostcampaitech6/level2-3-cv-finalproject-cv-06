@@ -1,0 +1,91 @@
+[tool.poetry]
+name = "level2-3-cv-finalproject-cv-06"
+version = "0.1.0"
+description = ""
+authors = ["백광현_T6074 <toiquen419@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.12"
+torch = {url = "https://download.pytorch.org/whl/cu118/torch-2.0.1%2Bcu118-cp311-cp311-linux_x86_64.whl"}
+torchvision = {url = "https://download.pytorch.org/whl/cu118/torchvision-0.15.2%2Bcu118-cp311-cp311-linux_x86_64.whl"}
+fastapi = {extras = ["all"], version = "^0.105.0"}
+uvicorn = "^0.27.1"
+loguru = "^0.7.2"
+jinja2 = "^3.1.3"
+sqlmodel = "^0.0.14"
+pydantic-settings = "^2.1.0"
+sqlalchemy = "2.0.23"
+pymysql = "^1.1.0"
+python-multipart = "^0.0.9"
+passlib = "^1.7.4"
+python-jose = "^3.3.0"
+boto3 = "^1.34.53"
+opencv-python = "^4.9.0.80"
+numpy = "^1.26.4"
+matplotlib = "^3.8.3"
+pillow = "^10.2.0"
+scikit-learn = "^1.4.1.post1"
+onnx = "^1.15.0"
+onnx2pytorch = "^0.4.1"
+ultralytics = "^8.1.24"
+h5py = "^3.10.0"
+ipykernel = "^6.29.3"
+tensorflow = "^2.15.0.post1"
+tf2onnx = {git = "https://github.com/onnx/tensorflow-onnx"}
+onnxruntime = "^1.17.1"
+keras2onnx = "^1.7.0"
+keras = "^3.0.5"
+pydot = "^2.0.0"
+websockets = "^12.0"
+sse-starlette = "^2.0.0"
+timm = "0.4.12"
+albumentations = "^1.4.1"
+wandb = "^0.16.4"
+xmltodict = "^0.13.0"
+tqdm = "^4.66.2"
+einops = "^0.7.0"
+torchinfo = "^1.8.0"
+pandas = "^2.2.1"
+pafy = "^0.5.5"
+youtube-dl = "^2021.12.17"
+cap-from-youtube = {git = "https://github.com/ibaiGorordo/cap_from_youtube"}
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.6.2"
+black = "^24.2.0"
+autoflake = "^2.3.0"
+isort = "^5.13.2"
+flake8 = "^7.0.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.0.2"
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+
+[tool.flake8]
+ignore = "E203, E501, W503"
+max-line-length = 88
+exclude = ".git,__pycache__,docs/,old/,build/,dist/"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
