@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 import random
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from datetime import datetime
 
@@ -704,10 +704,10 @@ def train_BNWVAD(
             ax.set_ylabel("GTs")
 
             ax2 = fig.add_subplot(122, aspect=1)
-            total_preds = np.concatenate(total_preds)
-            total_gts = np.concatenate(total_gts)
+            total_preds_np = np.concatenate(total_preds)
+            total_gts_np = np.concatenate(total_gts)
 
-            fpr, tpr, cut = roc_curve(y_true=total_gts, y_score=total_preds)
+            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
 
             auc = sklearn.metrics.auc(fpr, tpr)
 
@@ -726,6 +726,42 @@ def train_BNWVAD(
 
             plt.clf()
             plt.close()
+
+            # if epoch + 1 == max_epoch:
+            print("Drawing graphs...")
+            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                fig = plt.figure(figsize=(7, 7))
+                ax = fig.add_subplot(111)
+                ax.set_ylim([0, 1.01])
+                ax.set_title(f"Video {i} score graph")
+                ax.set_ylabel("Pred score")
+                ax.set_xlabel("Segment")
+                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                checker = np.concatenate((gt_g[1:], [0]))
+
+                gt_indices = np.where(gt_g != checker)[0]
+
+                for idx in range(len(gt_indices) // 2):
+
+                    ax.axvspan(
+                        gt_indices[2 * idx] + 0.5,
+                        gt_indices[2 * idx + 1] + 0.5,
+                        color="gray",
+                        linestyle="--",
+                        zorder=0,
+                        alpha=0.3,
+                    )
+
+                ax.plot(lins, pred_g)
+
+                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                plt.clf()
+                plt.close()
 
         scheduler.step()
 
@@ -1306,10 +1342,10 @@ def train_MIL(
             ax.set_ylabel("GTs")
 
             ax2 = fig.add_subplot(122, aspect=1)
-            total_preds = np.concatenate(total_preds)
-            total_gts = np.concatenate(total_gts)
+            total_preds_np = np.concatenate(total_preds)
+            total_gts_np = np.concatenate(total_gts)
 
-            fpr, tpr, cut = roc_curve(y_true=total_gts, y_score=total_preds)
+            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
 
             auc = sklearn.metrics.auc(fpr, tpr)
 
@@ -1328,6 +1364,42 @@ def train_MIL(
 
             plt.clf()
             plt.close()
+
+            # if epoch + 1 == max_epoch:
+            print("Drawing graphs...")
+            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                fig = plt.figure(figsize=(7, 7))
+                ax = fig.add_subplot(111)
+                ax.set_ylim([0, 1.01])
+                ax.set_title(f"Video {i} score graph")
+                ax.set_ylabel("Pred score")
+                ax.set_xlabel("Segment")
+                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                checker = np.concatenate((gt_g[1:], [0]))
+
+                gt_indices = np.where(gt_g != checker)[0]
+
+                for idx in range(len(gt_indices) // 2):
+
+                    ax.axvspan(
+                        gt_indices[2 * idx] + 0.5,
+                        gt_indices[2 * idx + 1] + 0.5,
+                        color="gray",
+                        linestyle="--",
+                        zorder=0,
+                        alpha=0.3,
+                    )
+
+                ax.plot(lins, pred_g)
+
+                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                plt.clf()
+                plt.close()
 
         scheduler.step()
 

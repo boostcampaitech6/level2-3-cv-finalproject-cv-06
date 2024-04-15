@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import random
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 from datetime import datetime
 
@@ -25,7 +26,7 @@ from tqdm import tqdm
 import wandb
 
 from shop_dataset import NormalVMAE, AbnormalVMAE
-from classifier import MILClassifier
+from classifier import MILClassifier, MILandFE
 from loss import MIL
 
 
@@ -216,7 +217,8 @@ def train(
     print(f"==>> {model_size} data_load_time: {data_load_time}")
 
     # Initialize the model
-    model = MILClassifier(drop_p=drop_rate)
+    # model = MILClassifier(drop_p=drop_rate)
+    model = MILandFE(drop_p=drop_rate)
 
     load_dict = None
 
@@ -469,6 +471,14 @@ def train(
                 total_normal_max = 0
                 total_normal_mean = 0
 
+                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                    total_TP = 0
+                    total_FN = 0
+                    total_FP = 0
+                    total_TN = 0
+                    total_preds = []
+                    total_gts = []
+
                 norm_valid_iter = iter(normal_valid_loader)
                 # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
 
@@ -561,8 +571,20 @@ def train(
                             TP_and_FN = pred_positive[gt_np > 0.9]
                             FP_and_TN = pred_positive[gt_np < 0.1]
 
-                            total_n_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_n_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_np)
+                                total_gts.append(gt_np)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_n_bthr += best_thr if diff_idx != 0 else 1
 
                             total_n_auc += auc
@@ -649,8 +671,20 @@ def train(
                             TP_and_FN = pred_positive[abnormal_gt > 0.9]
                             FP_and_TN = pred_positive[abnormal_gt < 0.1]
 
-                            total_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_abnormal_np)
+                                total_gts.append(abnormal_gt)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_bthr += best_thr if diff_idx != 0 else 1
 
                             total_auc += auc
@@ -784,6 +818,82 @@ def train(
         }
 
         wandb.log(new_wandb_metric_dict)
+
+        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+            fig = plt.figure(figsize=(14, 7))
+            ax = fig.add_subplot(121, aspect=1)
+            sns.heatmap(
+                conf_mtx,
+                xticklabels=["Abnormal", "Normal"],
+                yticklabels=["Abnormal", "Normal"],
+                annot=True,
+                fmt="d",
+                ax=ax,
+            )
+            ax.set_title("Confusion matrix")
+            ax.set_xlabel("Preds")
+            ax.set_ylabel("GTs")
+
+            ax2 = fig.add_subplot(122, aspect=1)
+            total_preds_np = np.concatenate(total_preds)
+            total_gts_np = np.concatenate(total_gts)
+
+            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+            auc = sklearn.metrics.auc(fpr, tpr)
+
+            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
+            ax2.plot([0, 1], [0, 1], linewidth=5)
+
+            ax2.set_xlim([-0.01, 1])
+            ax2.set_ylim([0, 1.01])
+            ax2.legend(loc="lower right")
+            ax2.set_title("ROC curve")
+            ax2.set_ylabel("True Positive Rate")
+            ax2.set_xlabel("False Positive Rate")
+
+            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+            plt.clf()
+            plt.close()
+
+            # if epoch + 1 == max_epoch:
+            print("Drawing graphs...")
+            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                fig = plt.figure(figsize=(7, 7))
+                ax = fig.add_subplot(111)
+                ax.set_ylim([0, 1.01])
+                ax.set_title(f"Video {i} score graph")
+                ax.set_ylabel("Pred score")
+                ax.set_xlabel("Frame")
+                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                checker = np.concatenate((gt_g[1:], [0]))
+
+                gt_indices = np.where(gt_g != checker)[0]
+
+                for idx in range(len(gt_indices) // 2):
+
+                    ax.axvspan(
+                        gt_indices[2 * idx] + 0.5,
+                        gt_indices[2 * idx + 1] + 0.5,
+                        color="gray",
+                        linestyle="--",
+                        zorder=0,
+                        alpha=0.3,
+                    )
+
+                ax.plot(lins, pred_g)
+
+                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                plt.clf()
+                plt.close()
 
         scheduler.step()
 
@@ -1109,6 +1219,14 @@ def train2(
                 total_normal_max = 0
                 total_normal_mean = 0
 
+                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                    total_TP = 0
+                    total_FN = 0
+                    total_FP = 0
+                    total_TN = 0
+                    total_preds = []
+                    total_gts = []
+
                 norm_valid_iter = iter(normal_valid_loader)
                 # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
 
@@ -1201,8 +1319,20 @@ def train2(
                             TP_and_FN = pred_positive[gt_np > 0.9]
                             FP_and_TN = pred_positive[gt_np < 0.1]
 
-                            total_n_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_n_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_np)
+                                total_gts.append(gt_np)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_n_bthr += best_thr if diff_idx != 0 else 1
 
                             total_n_auc += auc
@@ -1289,8 +1419,20 @@ def train2(
                             TP_and_FN = pred_positive[abnormal_gt > 0.9]
                             FP_and_TN = pred_positive[abnormal_gt < 0.1]
 
-                            total_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_abnormal_np)
+                                total_gts.append(abnormal_gt)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_bthr += best_thr if diff_idx != 0 else 1
 
                             total_auc += auc
@@ -1421,6 +1563,82 @@ def train2(
         }
 
         wandb.log(new_wandb_metric_dict)
+
+        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+            fig = plt.figure(figsize=(14, 7))
+            ax = fig.add_subplot(121, aspect=1)
+            sns.heatmap(
+                conf_mtx,
+                xticklabels=["Abnormal", "Normal"],
+                yticklabels=["Abnormal", "Normal"],
+                annot=True,
+                fmt="d",
+                ax=ax,
+            )
+            ax.set_title("Confusion matrix")
+            ax.set_xlabel("Preds")
+            ax.set_ylabel("GTs")
+
+            ax2 = fig.add_subplot(122, aspect=1)
+            total_preds_np = np.concatenate(total_preds)
+            total_gts_np = np.concatenate(total_gts)
+
+            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+            auc = sklearn.metrics.auc(fpr, tpr)
+
+            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
+            ax2.plot([0, 1], [0, 1], linewidth=5)
+
+            ax2.set_xlim([-0.01, 1])
+            ax2.set_ylim([0, 1.01])
+            ax2.legend(loc="lower right")
+            ax2.set_title("ROC curve")
+            ax2.set_ylabel("True Positive Rate")
+            ax2.set_xlabel("False Positive Rate")
+
+            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+            plt.clf()
+            plt.close()
+
+            # if epoch + 1 == max_epoch:
+            print("Drawing graphs...")
+            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                fig = plt.figure(figsize=(7, 7))
+                ax = fig.add_subplot(111)
+                ax.set_ylim([0, 1.01])
+                ax.set_title(f"Video {i} score graph")
+                ax.set_ylabel("Pred score")
+                ax.set_xlabel("Frame")
+                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                checker = np.concatenate((gt_g[1:], [0]))
+
+                gt_indices = np.where(gt_g != checker)[0]
+
+                for idx in range(len(gt_indices) // 2):
+
+                    ax.axvspan(
+                        gt_indices[2 * idx] + 0.5,
+                        gt_indices[2 * idx + 1] + 0.5,
+                        color="gray",
+                        linestyle="--",
+                        zorder=0,
+                        alpha=0.3,
+                    )
+
+                ax.plot(lins, pred_g)
+
+                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                plt.clf()
+                plt.close()
 
         scheduler.step()
 
@@ -1748,6 +1966,14 @@ def train3(
                 total_normal_max = 0
                 total_normal_mean = 0
 
+                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                    total_TP = 0
+                    total_FN = 0
+                    total_FP = 0
+                    total_TN = 0
+                    total_preds = []
+                    total_gts = []
+
                 norm_valid_iter = iter(normal_valid_loader)
                 # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
 
@@ -1840,8 +2066,20 @@ def train3(
                             TP_and_FN = pred_positive[gt_np > 0.9]
                             FP_and_TN = pred_positive[gt_np < 0.1]
 
-                            total_n_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_n_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_np)
+                                total_gts.append(gt_np)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_n_bthr += best_thr if diff_idx != 0 else 1
 
                             total_n_auc += auc
@@ -1928,8 +2166,20 @@ def train3(
                             TP_and_FN = pred_positive[abnormal_gt > 0.9]
                             FP_and_TN = pred_positive[abnormal_gt < 0.1]
 
-                            total_fpr += np.sum(FP_and_TN) / len(FP_and_TN)
-                            total_tpr += np.sum(TP_and_FN) / len(TP_and_FN)
+                            num_TP = np.sum(TP_and_FN)
+                            num_FP = np.sum(FP_and_TN)
+
+                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                                total_TP += num_TP
+                                total_FN += len(TP_and_FN) - num_TP
+                                total_FP += num_FP
+                                total_TN += len(FP_and_TN) - num_FP
+
+                                total_preds.append(pred_abnormal_np)
+                                total_gts.append(abnormal_gt)
+
+                            total_tpr += num_TP / len(TP_and_FN)
+                            total_fpr += num_FP / len(FP_and_TN)
                             total_bthr += best_thr if diff_idx != 0 else 1
 
                             total_auc += auc
@@ -2063,6 +2313,82 @@ def train3(
 
         wandb.log(new_wandb_metric_dict)
 
+        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+            fig = plt.figure(figsize=(14, 7))
+            ax = fig.add_subplot(121, aspect=1)
+            sns.heatmap(
+                conf_mtx,
+                xticklabels=["Abnormal", "Normal"],
+                yticklabels=["Abnormal", "Normal"],
+                annot=True,
+                fmt="d",
+                ax=ax,
+            )
+            ax.set_title("Confusion matrix")
+            ax.set_xlabel("Preds")
+            ax.set_ylabel("GTs")
+
+            ax2 = fig.add_subplot(122, aspect=1)
+            total_preds_np = np.concatenate(total_preds)
+            total_gts_np = np.concatenate(total_gts)
+
+            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+            auc = sklearn.metrics.auc(fpr, tpr)
+
+            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
+            ax2.plot([0, 1], [0, 1], linewidth=5)
+
+            ax2.set_xlim([-0.01, 1])
+            ax2.set_ylim([0, 1.01])
+            ax2.legend(loc="lower right")
+            ax2.set_title("ROC curve")
+            ax2.set_ylabel("True Positive Rate")
+            ax2.set_xlabel("False Positive Rate")
+
+            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+            plt.clf()
+            plt.close()
+
+            # if epoch + 1 == max_epoch:
+            print("Drawing graphs...")
+            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                fig = plt.figure(figsize=(7, 7))
+                ax = fig.add_subplot(111)
+                ax.set_ylim([0, 1.01])
+                ax.set_title(f"Video {i} score graph")
+                ax.set_ylabel("Pred score")
+                ax.set_xlabel("Frame")
+                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                checker = np.concatenate((gt_g[1:], [0]))
+
+                gt_indices = np.where(gt_g != checker)[0]
+
+                for idx in range(len(gt_indices) // 2):
+
+                    ax.axvspan(
+                        gt_indices[2 * idx] + 0.5,
+                        gt_indices[2 * idx + 1] + 0.5,
+                        color="gray",
+                        linestyle="--",
+                        zorder=0,
+                        alpha=0.3,
+                    )
+
+                ax.plot(lins, pred_g)
+
+                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                plt.clf()
+                plt.close()
+
         scheduler.step()
 
         epoch_end = datetime.now()
@@ -2095,10 +2421,10 @@ def train3(
 
 
 def main(args):
-    if (args.wandb_run_name).startswith("MIL_nl_feat_enhancer_"):
+    if (args.wandb_run_name).startswith("MIL_t1"):
         print("train 1")
         train(**args.__dict__)
-    elif (args.wandb_run_name).startswith("MIL_nl_BCEonly_feat_enhancer_"):
+    elif (args.wandb_run_name).startswith("MIL_t2"):
         print("train 2")
         train2(**args.__dict__)
     else:
