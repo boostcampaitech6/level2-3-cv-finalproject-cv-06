@@ -179,13 +179,13 @@ def train(
         dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers
     )
 
-    normal_valid_loader = DataLoader(
-        dataset=valid_dataset,
-        batch_size=val_batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=val_num_workers,
-    )
+    # normal_valid_loader = DataLoader(
+    #     dataset=valid_dataset,
+    #     batch_size=val_batch_size,
+    #     shuffle=False,
+    #     drop_last=True,
+    #     num_workers=val_num_workers,
+    # )
 
     abnormal_train_dataset = AbnormalVMAE(
         model_size=model_size,
@@ -207,8 +207,13 @@ def train(
         num_workers=num_workers,
     )
 
-    abnormal_valid_loader = DataLoader(
-        dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # abnormal_valid_loader = DataLoader(
+    #     dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # )
+
+    concat_valid_dataset = ConcatDataset([valid_dataset, abnormal_valid_dataset])
+    concat_valid_loader = DataLoader(
+        dataset=concat_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
     )
 
     data_load_end = datetime.now()
@@ -444,309 +449,203 @@ def train(
             model.eval()
 
             with torch.no_grad():
-                total_n_loss = 0
-                total_n_MIL_loss = 0
-                total_n_n_corrects = 0
-
-                total_n_fpr = 0
-                total_n_tpr = 0
-                total_n_bthr = 0
-                total_n_auc = 0
-                total_n_ap = 0
-
                 total_loss = 0
+
                 total_n_corrects = 0
 
-                total_fpr = 0
-                total_tpr = 0
-                total_bthr = 0
-                total_auc = 0
-                total_ap = 0
+                total_max = 0
+                total_mean = 0
 
-                error_n_count = 0
-                error_count = 0
+                total_TP = 0
+                total_FN = 0
+                total_num_TRUE = 0
+                total_FP = 0
+                total_TN = 0
+                total_num_FALSE = 0
+                total_preds = []
+                total_gts = []
 
-                total_abnormal_max = 0
-                total_abnormal_mean = 0
-                total_normal_max = 0
-                total_normal_mean = 0
-
-                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                    total_TP = 0
-                    total_FN = 0
-                    total_FP = 0
-                    total_TN = 0
-                    total_preds = []
-                    total_gts = []
-
-                norm_valid_iter = iter(normal_valid_loader)
-                # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
-
-                for step, abnormal_inputs in tqdm(
-                    enumerate(abnormal_valid_loader), total=len(abnormal_valid_loader)
+                for step, (inputs, gts) in tqdm(
+                    enumerate(concat_valid_loader), total=len(concat_valid_loader)
                 ):
-                    try:
-                        normal_inputs = next(norm_valid_iter)
+                    inputs = inputs.to(device)
+                    # (val_batch_size, 11, 710)
+                    # gts = gts.to(device)
+                    # 이상영상이면 (val_batch_size, 176)
+                    # 정상영상이면 (val_batch_size, 11)
+                    if gts.size(1) == inputs.size(1):
+                        gts11 = gts.view(-1, 1).to(device)
+                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                    else:
+                        gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
+                        gts176 = gts
 
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-                        normal_input, normal_gt = normal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 12)
+                    pred = model(inputs)
+                    # pred는 (val_batch_size * 11, 1)
 
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
+                    val_loss = criterion(pred, gts11)
 
-                        inputs = torch.cat((abnormal_input, normal_input), dim=1)
-                        gts = torch.cat((abnormal_gt2, normal_gt), dim=1)
-                        # inputs는 (val_batch_size, 24, 710), gts는 (val_batch_size, 24)
+                    pred_view = pred.view(val_batch_size, inputs.size(1))
 
-                        # inputs = inputs.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 24, 710)
-                        inputs = inputs.to(device)
-                        gts = gts.view(-1, 1).to(device)
-                        # (val_batch_size * 24, 1)
+                    pred_max = torch.mean(torch.max(pred_view, dim=-1)[0])
 
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 24, 1)
+                    pred_mean = torch.mean(pred_view)
 
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
+                    pred_correct = pred > thr
+                    gts_correct = gts11 > thr
 
-                        val_MIL_loss = MIL_criterion(pred, val_batch_size, abnormal_input.size(1))
+                    pred_correct = pred_correct == gts_correct
+                    corrects = torch.sum(pred_correct).item()
 
-                        pred_a = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 0, :]
-                        pred_n = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 1, :]
+                    pred = (pred.squeeze()).detach().cpu().numpy()
+                    pred_np = np.zeros(gts176.size(1))
 
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-                        pred_n_max = torch.mean(torch.max(pred_n, dim=-1)[0])
+                    step = np.array([i for i in range(gts176.size(1) + 1)])
 
-                        pred_a_mean = torch.mean(pred_a)
-                        pred_n_mean = torch.mean(pred_n)
+                    for j in range(inputs.size(1)):
+                        pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
+                    gts176 = gts176.squeeze().detach().numpy()
 
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
+                    pred_positive = pred_np > thr
+                    TP_and_FN = pred_positive[gts176 > 0.9]
+                    FP_and_TN = pred_positive[gts176 < 0.1]
 
-                        pred = (pred.squeeze()).detach().cpu().numpy()
+                    num_TP = np.sum(TP_and_FN)
+                    num_FP = np.sum(FP_and_TN)
 
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-                        pred_normal_np = np.zeros(abnormal_gt.size(1))
+                    total_TP += num_TP
+                    total_FN += len(TP_and_FN) - num_TP
+                    total_FP += num_FP
+                    total_TN += len(FP_and_TN) - num_FP
 
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
+                    total_preds.append(pred_np)
+                    total_gts.append(gts176)
 
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-                            pred_normal_np[step[j] * 16 : step[j + 1] * 16] = pred[abnormal_input.size(1) + j]
+                    total_num_TRUE += len(TP_and_FN)
+                    total_num_FALSE += len(FP_and_TN)
+                    total_n_corrects += corrects / inputs.size(1)
 
-                        pred_np = np.concatenate((pred_abnormal_np, pred_normal_np), axis=0)
+                    total_loss += val_loss.item()
 
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        # normal_gt = np.zeros_like(abnormal_gt2)
-                        normal_gt = np.zeros_like(abnormal_gt)
-                        # gt_np = np.concatenate((abnormal_gt2, normal_gt), axis=0)
-                        gt_np = np.concatenate((abnormal_gt, normal_gt), axis=0)
+                    total_max += pred_max.item()
+                    total_mean += pred_mean.item()
 
-                        try:
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred_np)
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred)
+                val_mean_loss = total_loss / len(concat_valid_loader)
 
-                            fpr, tpr, cut = roc_curve(y_true=gt_np, y_score=pred_np)
-                            precision, recall, cut2 = precision_recall_curve(gt_np, pred_np)
+                val_tpr = total_TP / total_num_TRUE
+                val_fpr = total_FP / total_num_FALSE
 
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_np > thr
-                            TP_and_FN = pred_positive[gt_np > 0.9]
-                            FP_and_TN = pred_positive[gt_np < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_np)
-                                total_gts.append(gt_np)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_n_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_n_auc += auc
-                            total_n_ap += ap
-                            total_n_n_corrects += corrects / (abnormal_input.size(1) * 2)
-                            total_n_loss += val_loss.item()
-                            total_n_MIL_loss += val_MIL_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                            total_normal_max += pred_n_max.item()
-                            total_normal_mean += pred_n_mean.item()
-
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_n_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-                    except StopIteration:
-                        # if not use_extra:
-                        #     break
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
-
-                        # inputs = abnormal_input.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 12, 710)
-                        inputs = abnormal_input.to(device)
-                        gts = abnormal_gt2.view(-1, 1).to(device)
-                        # (val_batch_size * 12, 1)
-
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 12, 1)
-
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
-
-                        pred_a = pred.view(val_batch_size, abnormal_input.size(1))
-
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-
-                        pred_a_mean = torch.mean(pred_a)
-
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
-
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
-
-                        pred = (pred.squeeze()).detach().cpu().numpy()
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
-
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-
-                        try:
-                            # auc = roc_auc_score(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            # auc = roc_auc_score(y_true=abnormal_gt2, y_score=pred)
-
-                            fpr, tpr, cut = roc_curve(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            precision, recall, cut2 = precision_recall_curve(abnormal_gt, pred_abnormal_np)
-
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_abnormal_np > thr
-                            TP_and_FN = pred_positive[abnormal_gt > 0.9]
-                            FP_and_TN = pred_positive[abnormal_gt < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_abnormal_np)
-                                total_gts.append(abnormal_gt)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_auc += auc
-                            total_ap += ap
-                            total_n_corrects += corrects / abnormal_input.size(1)
-                            # normal + abnormal 24개와 다르게 abnormal 12개만 있음 -> /12 => 2/24
-                            total_loss += val_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-
-                val_n_mean_loss = total_n_loss / (len(normal_valid_loader) - error_n_count)
-                val_n_mean_MIL_loss = total_n_MIL_loss / (len(normal_valid_loader) - error_n_count)
-
-                val_n_fpr = total_n_fpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_tpr = total_n_tpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_bthr = total_n_bthr / ((len(normal_valid_loader) - error_n_count))
-                val_n_auc = total_n_auc / (len(normal_valid_loader) - error_n_count)
-                val_n_ap = total_n_ap / (len(normal_valid_loader) - error_n_count)
-
-                val_n_accuracy = total_n_n_corrects / ((len(normal_valid_loader) - error_n_count))
-
-                val_mean_loss = (total_loss + total_n_loss) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-
-                val_fpr = (total_fpr + total_n_fpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_tpr = (total_tpr + total_n_tpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_bthr = (total_bthr + total_n_bthr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_auc = (total_auc + total_n_auc) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_ap = (total_ap + total_n_ap) / (len(abnormal_valid_loader) - error_n_count - error_count)
-                val_accuracy = (total_n_corrects + total_n_n_corrects) / (
-                    (len(abnormal_valid_loader) - error_n_count - error_count)
-                )
+                val_accuracy = total_n_corrects / len(concat_valid_loader)
                 # for loop 한번에 abnormal 12, normal 12해서 24개 정답 확인
 
-                val_mean_normal_max = total_normal_max / (len(normal_valid_loader) - error_n_count)
-                val_mean_normal_mean = total_normal_mean / (len(normal_valid_loader) - error_n_count)
-                val_mean_abnormal_max = total_abnormal_max / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
+                val_mean_max = total_max / len(concat_valid_loader)
+                val_mean_mean = total_mean / len(concat_valid_loader)
+
+            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+                fig = plt.figure(figsize=(14, 7))
+                ax = fig.add_subplot(121, aspect=1)
+                sns.heatmap(
+                    conf_mtx,
+                    xticklabels=["Abnormal", "Normal"],
+                    yticklabels=["Abnormal", "Normal"],
+                    annot=True,
+                    fmt="d",
+                    ax=ax,
                 )
-                val_mean_abnormal_mean = total_abnormal_mean / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
+                ax.set_title("Confusion matrix")
+                ax.set_xlabel("Preds")
+                ax.set_ylabel("GTs")
+
+                ax2 = fig.add_subplot(122, aspect=1)
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
+
+                ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {val_auc}")
+                ax2.plot([0, 1], [0, 1], linewidth=5)
+
+                ax2.set_xlim([-0.01, 1])
+                ax2.set_ylim([0, 1.01])
+                ax2.legend(loc="lower right")
+                ax2.set_title("ROC curve")
+                ax2.set_ylabel("True Positive Rate")
+                ax2.set_xlabel("False Positive Rate")
+
+                wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+                # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+                plt.clf()
+                plt.close()
+
+                # if epoch + 1 == max_epoch:
+                print("Drawing graphs...")
+                for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                    fig = plt.figure(figsize=(7, 7))
+                    ax = fig.add_subplot(111)
+                    ax.set_ylim([0, 1.01])
+                    ax.set_title(f"Video {i} score graph")
+                    ax.set_ylabel("Pred score")
+                    ax.set_xlabel("Segment")
+                    lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                    checker = np.concatenate((gt_g[1:], [0]))
+
+                    gt_indices = np.where(gt_g != checker)[0]
+
+                    for idx in range(len(gt_indices) // 2):
+
+                        ax.axvspan(
+                            gt_indices[2 * idx] + 0.5,
+                            gt_indices[2 * idx + 1] + 0.5,
+                            color="gray",
+                            linestyle="--",
+                            zorder=0,
+                            alpha=0.3,
+                        )
+
+                    ax.plot(lins, pred_g)
+
+                    if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                        os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                    plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                    plt.clf()
+                    plt.close()
+            else:
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
 
             if best_loss > val_mean_loss:
-                print(f"Best performance at epoch: {epoch + 1}, {best_loss:.4f} -> {val_mean_loss:.4f}")
+                str_to_keep = f"Best auc performance at epoch: {epoch + 1}, {best_auc:.4f} -> {val_auc:.4f}"
+                print(str_to_keep)
                 print(f"Save model in {model_dir}")
                 states = {
                     "epoch": epoch,
@@ -798,122 +697,26 @@ def train(
             "valid_auc": val_auc,
             "valid_ap": val_ap,
             "valid_accuracy": val_accuracy,
-            "valid_n_loss": val_n_mean_loss,
-            "valid_n_MIL_loss": val_n_mean_MIL_loss,
-            "valid_n_fpr": val_n_fpr,
-            "valid_n_tpr": val_n_tpr,
-            "valid_n_bthr": val_n_bthr,
-            "valid_n_auc": val_n_auc,
-            "valid_n_ap": val_n_ap,
-            "valid_n_accuracy": val_n_accuracy,
             "learning_rate": scheduler.get_last_lr()[0],
             "train_abnormal_max_mean": epoch_mean_abnormal_max,
             "train_abnormal_mean": epoch_mean_abnormal_mean,
             "train_normal_max_mean": epoch_mean_normal_max,
             "train_normal_mean": epoch_mean_normal_mean,
-            "valid_abnormal_max_mean": val_mean_abnormal_max,
-            "valid_abnormal_mean": val_mean_abnormal_mean,
-            "valid_normal_max_mean": val_mean_normal_max,
-            "valid_normal_mean": val_mean_normal_mean,
+            "valid_max_mean": val_mean_max,
+            "valid_mean": val_mean_mean,
         }
 
         wandb.log(new_wandb_metric_dict)
-
-        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
-            fig = plt.figure(figsize=(14, 7))
-            ax = fig.add_subplot(121, aspect=1)
-            sns.heatmap(
-                conf_mtx,
-                xticklabels=["Abnormal", "Normal"],
-                yticklabels=["Abnormal", "Normal"],
-                annot=True,
-                fmt="d",
-                ax=ax,
-            )
-            ax.set_title("Confusion matrix")
-            ax.set_xlabel("Preds")
-            ax.set_ylabel("GTs")
-
-            ax2 = fig.add_subplot(122, aspect=1)
-            total_preds_np = np.concatenate(total_preds)
-            total_gts_np = np.concatenate(total_gts)
-
-            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
-
-            auc = sklearn.metrics.auc(fpr, tpr)
-
-            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
-            ax2.plot([0, 1], [0, 1], linewidth=5)
-
-            ax2.set_xlim([-0.01, 1])
-            ax2.set_ylim([0, 1.01])
-            ax2.legend(loc="lower right")
-            ax2.set_title("ROC curve")
-            ax2.set_ylabel("True Positive Rate")
-            ax2.set_xlabel("False Positive Rate")
-
-            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
-            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
-
-            plt.clf()
-            plt.close()
-
-            # if epoch + 1 == max_epoch:
-            print("Drawing graphs...")
-            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
-                fig = plt.figure(figsize=(7, 7))
-                ax = fig.add_subplot(111)
-                ax.set_ylim([0, 1.01])
-                ax.set_title(f"Video {i} score graph")
-                ax.set_ylabel("Pred score")
-                ax.set_xlabel("Frame")
-                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
-
-                checker = np.concatenate((gt_g[1:], [0]))
-
-                gt_indices = np.where(gt_g != checker)[0]
-
-                for idx in range(len(gt_indices) // 2):
-
-                    ax.axvspan(
-                        gt_indices[2 * idx] + 0.5,
-                        gt_indices[2 * idx + 1] + 0.5,
-                        color="gray",
-                        linestyle="--",
-                        zorder=0,
-                        alpha=0.3,
-                    )
-
-                ax.plot(lins, pred_g)
-
-                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
-                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
-
-                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
-
-                plt.clf()
-                plt.close()
 
         scheduler.step()
 
         epoch_end = datetime.now()
         epoch_time = epoch_end - epoch_start
         epoch_time = str(epoch_time).split(".")[0]
-        print(
-            f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)} valid_n_loss: {round(val_n_mean_loss,4)} valid_n_MIL_loss: {round(val_n_mean_MIL_loss,4)}"
-        )
-        print(f"valid_fpr: {val_fpr} valid_n_fpr: {val_n_fpr}")
-        print(f"valid_tpr: {val_tpr} valid_n_tpr: {val_n_tpr}")
-        print(f"valid_bthr: {val_bthr} valid_n_bthr: {val_n_bthr}")
-        print(
-            f"valid_auc: {val_auc:.4f} valid_n_auc: {val_n_auc:.4f}\nvalid_ap: {val_ap:.4f} valid_n_ap: {val_n_ap:.4f}\nvalid_accuracy: {val_accuracy:.2f} valid_n_accuracy: {val_n_accuracy:.2f}"
-        )
-        print(
-            f"==>> val_abnormal_max_mean: {val_mean_abnormal_max} val_abnormal_mean: {val_mean_abnormal_mean}"
-        )
-        print(f"==>> val_normal_max_mean: {val_mean_normal_max} val_normal_mean: {val_mean_normal_mean}")
-        print(f"==>> error_count: {error_count}")
+        print(f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)}")
+        print(f"valid_tpr: {val_tpr} valid_fpr: {val_fpr} valid_bthr: {val_bthr}")
+        print(f"valid_auc: {val_auc:.4f} valid_ap: {val_ap:.4f} valid_accuracy: {val_accuracy:.2f}")
+        print(f"==>> val_max_mean: {val_mean_max} val_mean: {val_mean_mean}")
 
         if counter > patience:
             print("Early Stopping...")
@@ -922,6 +725,7 @@ def train(
     time_end = datetime.now()
     total_time = time_end - time_start
     total_time = str(total_time).split(".")[0]
+    print(str_to_keep)
     print(f"==>> total time: {total_time}")
 
 
@@ -986,13 +790,13 @@ def train2(
     #     dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers
     # )
 
-    normal_valid_loader = DataLoader(
-        dataset=valid_dataset,
-        batch_size=val_batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=val_num_workers,
-    )
+    # normal_valid_loader = DataLoader(
+    #     dataset=valid_dataset,
+    #     batch_size=val_batch_size,
+    #     shuffle=False,
+    #     drop_last=True,
+    #     num_workers=val_num_workers,
+    # )
 
     abnormal_train_dataset = AbnormalVMAE(
         model_size=model_size,
@@ -1020,8 +824,13 @@ def train2(
         dataset=concat_trainset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers
     )
 
-    abnormal_valid_loader = DataLoader(
-        dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # abnormal_valid_loader = DataLoader(
+    #     dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # )
+
+    concat_valid_dataset = ConcatDataset([valid_dataset, abnormal_valid_dataset])
+    concat_valid_loader = DataLoader(
+        dataset=concat_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
     )
 
     data_load_end = datetime.now()
@@ -1192,306 +1001,199 @@ def train2(
             model.eval()
 
             with torch.no_grad():
-                total_n_loss = 0
-                total_n_MIL_loss = 0
-                total_n_n_corrects = 0
-
-                total_n_fpr = 0
-                total_n_tpr = 0
-                total_n_bthr = 0
-                total_n_auc = 0
-                total_n_ap = 0
-
                 total_loss = 0
+
                 total_n_corrects = 0
 
-                total_fpr = 0
-                total_tpr = 0
-                total_bthr = 0
-                total_auc = 0
-                total_ap = 0
+                total_max = 0
+                total_mean = 0
 
-                error_n_count = 0
-                error_count = 0
+                total_TP = 0
+                total_FN = 0
+                total_num_TRUE = 0
+                total_FP = 0
+                total_TN = 0
+                total_num_FALSE = 0
+                total_preds = []
+                total_gts = []
 
-                total_abnormal_max = 0
-                total_abnormal_mean = 0
-                total_normal_max = 0
-                total_normal_mean = 0
-
-                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                    total_TP = 0
-                    total_FN = 0
-                    total_FP = 0
-                    total_TN = 0
-                    total_preds = []
-                    total_gts = []
-
-                norm_valid_iter = iter(normal_valid_loader)
-                # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
-
-                for step, abnormal_inputs in tqdm(
-                    enumerate(abnormal_valid_loader), total=len(abnormal_valid_loader)
+                for step, (inputs, gts) in tqdm(
+                    enumerate(concat_valid_loader), total=len(concat_valid_loader)
                 ):
-                    try:
-                        normal_inputs = next(norm_valid_iter)
+                    inputs = inputs.to(device)
+                    # (val_batch_size, 11, 710)
+                    # gts = gts.to(device)
+                    # 이상영상이면 (val_batch_size, 176)
+                    # 정상영상이면 (val_batch_size, 11)
+                    if gts.size(1) == inputs.size(1):
+                        gts11 = gts.view(-1, 1).to(device)
+                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                    else:
+                        gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
+                        gts176 = gts
 
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-                        normal_input, normal_gt = normal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 12)
+                    pred = model(inputs)
+                    # pred는 (val_batch_size * 11, 1)
 
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
+                    val_loss = criterion(pred, gts11)
 
-                        inputs = torch.cat((abnormal_input, normal_input), dim=1)
-                        gts = torch.cat((abnormal_gt2, normal_gt), dim=1)
-                        # inputs는 (val_batch_size, 24, 710), gts는 (val_batch_size, 24)
+                    pred_view = pred.view(val_batch_size, inputs.size(1))
 
-                        # inputs = inputs.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 24, 710)
-                        inputs = inputs.to(device)
-                        gts = gts.view(-1, 1).to(device)
-                        # (val_batch_size * 24, 1)
+                    pred_max = torch.mean(torch.max(pred_view, dim=-1)[0])
 
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 24, 1)
+                    pred_mean = torch.mean(pred_view)
 
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
+                    pred_correct = pred > thr
+                    gts_correct = gts11 > thr
 
-                        val_MIL_loss = MIL_criterion(pred, val_batch_size, abnormal_input.size(1))
+                    pred_correct = pred_correct == gts_correct
+                    corrects = torch.sum(pred_correct).item()
 
-                        pred_a = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 0, :]
-                        pred_n = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 1, :]
+                    pred = (pred.squeeze()).detach().cpu().numpy()
+                    pred_np = np.zeros(gts176.size(1))
 
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-                        pred_n_max = torch.mean(torch.max(pred_n, dim=-1)[0])
+                    step = np.array([i for i in range(gts176.size(1) + 1)])
 
-                        pred_a_mean = torch.mean(pred_a)
-                        pred_n_mean = torch.mean(pred_n)
+                    for j in range(inputs.size(1)):
+                        pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
+                    gts176 = gts176.squeeze().detach().numpy()
 
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
+                    pred_positive = pred_np > thr
+                    TP_and_FN = pred_positive[gts176 > 0.9]
+                    FP_and_TN = pred_positive[gts176 < 0.1]
 
-                        pred = (pred.squeeze()).detach().cpu().numpy()
+                    num_TP = np.sum(TP_and_FN)
+                    num_FP = np.sum(FP_and_TN)
 
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-                        pred_normal_np = np.zeros(abnormal_gt.size(1))
+                    total_TP += num_TP
+                    total_FN += len(TP_and_FN) - num_TP
+                    total_FP += num_FP
+                    total_TN += len(FP_and_TN) - num_FP
 
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
+                    total_preds.append(pred_np)
+                    total_gts.append(gts176)
 
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-                            pred_normal_np[step[j] * 16 : step[j + 1] * 16] = pred[abnormal_input.size(1) + j]
+                    total_num_TRUE += len(TP_and_FN)
+                    total_num_FALSE += len(FP_and_TN)
+                    total_n_corrects += corrects / inputs.size(1)
 
-                        pred_np = np.concatenate((pred_abnormal_np, pred_normal_np), axis=0)
+                    total_loss += val_loss.item()
 
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        # normal_gt = np.zeros_like(abnormal_gt2)
-                        normal_gt = np.zeros_like(abnormal_gt)
-                        # gt_np = np.concatenate((abnormal_gt2, normal_gt), axis=0)
-                        gt_np = np.concatenate((abnormal_gt, normal_gt), axis=0)
+                    total_max += pred_max.item()
+                    total_mean += pred_mean.item()
 
-                        try:
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred_np)
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred)
+                val_mean_loss = total_loss / len(concat_valid_loader)
 
-                            fpr, tpr, cut = roc_curve(y_true=gt_np, y_score=pred_np)
-                            precision, recall, cut2 = precision_recall_curve(gt_np, pred_np)
+                val_tpr = total_TP / total_num_TRUE
+                val_fpr = total_FP / total_num_FALSE
 
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_np > thr
-                            TP_and_FN = pred_positive[gt_np > 0.9]
-                            FP_and_TN = pred_positive[gt_np < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_np)
-                                total_gts.append(gt_np)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_n_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_n_auc += auc
-                            total_n_ap += ap
-                            total_n_n_corrects += corrects / (abnormal_input.size(1) * 2)
-                            total_n_loss += val_loss.item()
-                            total_n_MIL_loss += val_MIL_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                            total_normal_max += pred_n_max.item()
-                            total_normal_mean += pred_n_mean.item()
-
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_n_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-                    except StopIteration:
-                        # if not use_extra:
-                        #     break
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
-
-                        # inputs = abnormal_input.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 12, 710)
-                        inputs = abnormal_input.to(device)
-                        gts = abnormal_gt2.view(-1, 1).to(device)
-                        # (val_batch_size * 12, 1)
-
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 12, 1)
-
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
-
-                        pred_a = pred.view(val_batch_size, abnormal_input.size(1))
-
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-
-                        pred_a_mean = torch.mean(pred_a)
-
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
-
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
-
-                        pred = (pred.squeeze()).detach().cpu().numpy()
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
-
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-
-                        try:
-                            # auc = roc_auc_score(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            # auc = roc_auc_score(y_true=abnormal_gt2, y_score=pred)
-
-                            fpr, tpr, cut = roc_curve(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            precision, recall, cut2 = precision_recall_curve(abnormal_gt, pred_abnormal_np)
-
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_abnormal_np > thr
-                            TP_and_FN = pred_positive[abnormal_gt > 0.9]
-                            FP_and_TN = pred_positive[abnormal_gt < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_abnormal_np)
-                                total_gts.append(abnormal_gt)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_auc += auc
-                            total_ap += ap
-                            total_n_corrects += corrects / abnormal_input.size(1)
-                            # normal + abnormal 24개와 다르게 abnormal 12개만 있음 -> /12 => 2/24
-                            total_loss += val_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-
-                val_n_mean_loss = total_n_loss / (len(normal_valid_loader) - error_n_count)
-                val_n_mean_MIL_loss = total_n_MIL_loss / (len(normal_valid_loader) - error_n_count)
-
-                val_n_fpr = total_n_fpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_tpr = total_n_tpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_bthr = total_n_bthr / ((len(normal_valid_loader) - error_n_count))
-                val_n_auc = total_n_auc / (len(normal_valid_loader) - error_n_count)
-                val_n_ap = total_n_ap / (len(normal_valid_loader) - error_n_count)
-
-                val_n_accuracy = total_n_n_corrects / ((len(normal_valid_loader) - error_n_count))
-
-                val_mean_loss = (total_loss + total_n_loss) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-
-                val_fpr = (total_fpr + total_n_fpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_tpr = (total_tpr + total_n_tpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_bthr = (total_bthr + total_n_bthr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_auc = (total_auc + total_n_auc) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_ap = (total_ap + total_n_ap) / (len(abnormal_valid_loader) - error_n_count - error_count)
-                val_accuracy = (total_n_corrects + total_n_n_corrects) / (
-                    (len(abnormal_valid_loader) - error_n_count - error_count)
-                )
+                val_accuracy = total_n_corrects / len(concat_valid_loader)
                 # for loop 한번에 abnormal 12, normal 12해서 24개 정답 확인
 
-                val_mean_normal_max = total_normal_max / (len(normal_valid_loader) - error_n_count)
-                val_mean_normal_mean = total_normal_mean / (len(normal_valid_loader) - error_n_count)
-                val_mean_abnormal_max = total_abnormal_max / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
+                val_mean_max = total_max / len(concat_valid_loader)
+                val_mean_mean = total_mean / len(concat_valid_loader)
+
+            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+                fig = plt.figure(figsize=(14, 7))
+                ax = fig.add_subplot(121, aspect=1)
+                sns.heatmap(
+                    conf_mtx,
+                    xticklabels=["Abnormal", "Normal"],
+                    yticklabels=["Abnormal", "Normal"],
+                    annot=True,
+                    fmt="d",
+                    ax=ax,
                 )
-                val_mean_abnormal_mean = total_abnormal_mean / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
+                ax.set_title("Confusion matrix")
+                ax.set_xlabel("Preds")
+                ax.set_ylabel("GTs")
+
+                ax2 = fig.add_subplot(122, aspect=1)
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
+
+                ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {val_auc}")
+                ax2.plot([0, 1], [0, 1], linewidth=5)
+
+                ax2.set_xlim([-0.01, 1])
+                ax2.set_ylim([0, 1.01])
+                ax2.legend(loc="lower right")
+                ax2.set_title("ROC curve")
+                ax2.set_ylabel("True Positive Rate")
+                ax2.set_xlabel("False Positive Rate")
+
+                wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+                # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+                plt.clf()
+                plt.close()
+
+                # if epoch + 1 == max_epoch:
+                print("Drawing graphs...")
+                for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                    fig = plt.figure(figsize=(7, 7))
+                    ax = fig.add_subplot(111)
+                    ax.set_ylim([0, 1.01])
+                    ax.set_title(f"Video {i} score graph")
+                    ax.set_ylabel("Pred score")
+                    ax.set_xlabel("Segment")
+                    lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                    checker = np.concatenate((gt_g[1:], [0]))
+
+                    gt_indices = np.where(gt_g != checker)[0]
+
+                    for idx in range(len(gt_indices) // 2):
+
+                        ax.axvspan(
+                            gt_indices[2 * idx] + 0.5,
+                            gt_indices[2 * idx + 1] + 0.5,
+                            color="gray",
+                            linestyle="--",
+                            zorder=0,
+                            alpha=0.3,
+                        )
+
+                    ax.plot(lins, pred_g)
+
+                    if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                        os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                    plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                    plt.clf()
+                    plt.close()
+            else:
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
 
             if best_loss > val_mean_loss:
                 print(f"Best performance at epoch: {epoch + 1}, {best_loss:.4f} -> {val_mean_loss:.4f}")
@@ -1514,7 +1216,8 @@ def train2(
             #     counter += 1
 
             if best_auc < val_auc:
-                print(f"Best auc performance at epoch: {epoch + 1}, {best_auc:.4f} -> {val_auc:.4f}")
+                str_to_keep = f"Best auc performance at epoch: {epoch + 1}, {best_auc:.4f} -> {val_auc:.4f}"
+                print(str_to_keep)
                 print(f"Save model in {model_dir}")
                 states = {
                     "epoch": epoch,
@@ -1543,122 +1246,26 @@ def train2(
             "valid_auc": val_auc,
             "valid_ap": val_ap,
             "valid_accuracy": val_accuracy,
-            "valid_n_loss": val_n_mean_loss,
-            "valid_n_MIL_loss": val_n_mean_MIL_loss,
-            "valid_n_fpr": val_n_fpr,
-            "valid_n_tpr": val_n_tpr,
-            "valid_n_bthr": val_n_bthr,
-            "valid_n_auc": val_n_auc,
-            "valid_n_ap": val_n_ap,
-            "valid_n_accuracy": val_n_accuracy,
             "learning_rate": scheduler.get_last_lr()[0],
             "train_abnormal_max_mean": epoch_mean_abnormal_max,
             "train_abnormal_mean": epoch_mean_abnormal_mean,
             "train_normal_max_mean": epoch_mean_normal_max,
             "train_normal_mean": epoch_mean_normal_mean,
-            "valid_abnormal_max_mean": val_mean_abnormal_max,
-            "valid_abnormal_mean": val_mean_abnormal_mean,
-            "valid_normal_max_mean": val_mean_normal_max,
-            "valid_normal_mean": val_mean_normal_mean,
+            "valid_max_mean": val_mean_max,
+            "valid_mean": val_mean_mean,
         }
 
         wandb.log(new_wandb_metric_dict)
-
-        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
-            fig = plt.figure(figsize=(14, 7))
-            ax = fig.add_subplot(121, aspect=1)
-            sns.heatmap(
-                conf_mtx,
-                xticklabels=["Abnormal", "Normal"],
-                yticklabels=["Abnormal", "Normal"],
-                annot=True,
-                fmt="d",
-                ax=ax,
-            )
-            ax.set_title("Confusion matrix")
-            ax.set_xlabel("Preds")
-            ax.set_ylabel("GTs")
-
-            ax2 = fig.add_subplot(122, aspect=1)
-            total_preds_np = np.concatenate(total_preds)
-            total_gts_np = np.concatenate(total_gts)
-
-            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
-
-            auc = sklearn.metrics.auc(fpr, tpr)
-
-            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
-            ax2.plot([0, 1], [0, 1], linewidth=5)
-
-            ax2.set_xlim([-0.01, 1])
-            ax2.set_ylim([0, 1.01])
-            ax2.legend(loc="lower right")
-            ax2.set_title("ROC curve")
-            ax2.set_ylabel("True Positive Rate")
-            ax2.set_xlabel("False Positive Rate")
-
-            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
-            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
-
-            plt.clf()
-            plt.close()
-
-            # if epoch + 1 == max_epoch:
-            print("Drawing graphs...")
-            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
-                fig = plt.figure(figsize=(7, 7))
-                ax = fig.add_subplot(111)
-                ax.set_ylim([0, 1.01])
-                ax.set_title(f"Video {i} score graph")
-                ax.set_ylabel("Pred score")
-                ax.set_xlabel("Frame")
-                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
-
-                checker = np.concatenate((gt_g[1:], [0]))
-
-                gt_indices = np.where(gt_g != checker)[0]
-
-                for idx in range(len(gt_indices) // 2):
-
-                    ax.axvspan(
-                        gt_indices[2 * idx] + 0.5,
-                        gt_indices[2 * idx + 1] + 0.5,
-                        color="gray",
-                        linestyle="--",
-                        zorder=0,
-                        alpha=0.3,
-                    )
-
-                ax.plot(lins, pred_g)
-
-                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
-                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
-
-                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
-
-                plt.clf()
-                plt.close()
 
         scheduler.step()
 
         epoch_end = datetime.now()
         epoch_time = epoch_end - epoch_start
         epoch_time = str(epoch_time).split(".")[0]
-        print(
-            f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)} valid_n_loss: {round(val_n_mean_loss,4)} valid_n_MIL_loss: {round(val_n_mean_MIL_loss,4)}"
-        )
-        print(f"valid_fpr: {val_fpr} valid_n_fpr: {val_n_fpr}")
-        print(f"valid_tpr: {val_tpr} valid_n_tpr: {val_n_tpr}")
-        print(f"valid_bthr: {val_bthr} valid_n_bthr: {val_n_bthr}")
-        print(
-            f"valid_auc: {val_auc:.4f} valid_n_auc: {val_n_auc:.4f}\nvalid_ap: {val_ap:.4f} valid_n_ap: {val_n_ap:.4f}\nvalid_accuracy: {val_accuracy:.2f} valid_n_accuracy: {val_n_accuracy:.2f}"
-        )
-        print(
-            f"==>> val_abnormal_max_mean: {val_mean_abnormal_max} val_abnormal_mean: {val_mean_abnormal_mean}"
-        )
-        print(f"==>> val_normal_max_mean: {val_mean_normal_max} val_normal_mean: {val_mean_normal_mean}")
-        print(f"==>> error_count: {error_count}")
+        print(f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)}")
+        print(f"valid_tpr: {val_tpr} valid_fpr: {val_fpr} valid_bthr: {val_bthr}")
+        print(f"valid_auc: {val_auc:.4f} valid_ap: {val_ap:.4f} valid_accuracy: {val_accuracy:.2f}")
+        print(f"==>> val_max_mean: {val_mean_max} val_mean: {val_mean_mean}")
 
         if counter > patience:
             print("Early Stopping...")
@@ -1667,6 +1274,7 @@ def train2(
     time_end = datetime.now()
     total_time = time_end - time_start
     total_time = str(total_time).split(".")[0]
+    print(str_to_keep)
     print(f"==>> total time: {total_time}")
 
 
@@ -1731,13 +1339,13 @@ def train3(
         dataset=train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=num_workers
     )
 
-    normal_valid_loader = DataLoader(
-        dataset=valid_dataset,
-        batch_size=val_batch_size,
-        shuffle=False,
-        drop_last=True,
-        num_workers=val_num_workers,
-    )
+    # normal_valid_loader = DataLoader(
+    #     dataset=valid_dataset,
+    #     batch_size=val_batch_size,
+    #     shuffle=False,
+    #     drop_last=True,
+    #     num_workers=val_num_workers,
+    # )
 
     abnormal_train_dataset = AbnormalVMAE(
         model_size=model_size,
@@ -1759,8 +1367,13 @@ def train3(
         num_workers=num_workers,
     )
 
-    abnormal_valid_loader = DataLoader(
-        dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # abnormal_valid_loader = DataLoader(
+    #     dataset=abnormal_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
+    # )
+
+    concat_valid_dataset = ConcatDataset([valid_dataset, abnormal_valid_dataset])
+    concat_valid_loader = DataLoader(
+        dataset=concat_valid_dataset, batch_size=val_batch_size, shuffle=False, num_workers=val_num_workers
     )
 
     data_load_end = datetime.now()
@@ -1939,306 +1552,199 @@ def train3(
             model.eval()
 
             with torch.no_grad():
-                total_n_loss = 0
-                total_n_MIL_loss = 0
-                total_n_n_corrects = 0
-
-                total_n_fpr = 0
-                total_n_tpr = 0
-                total_n_bthr = 0
-                total_n_auc = 0
-                total_n_ap = 0
-
                 total_loss = 0
+
                 total_n_corrects = 0
 
-                total_fpr = 0
-                total_tpr = 0
-                total_bthr = 0
-                total_auc = 0
-                total_ap = 0
+                total_max = 0
+                total_mean = 0
 
-                error_n_count = 0
-                error_count = 0
+                total_TP = 0
+                total_FN = 0
+                total_num_TRUE = 0
+                total_FP = 0
+                total_TN = 0
+                total_num_FALSE = 0
+                total_preds = []
+                total_gts = []
 
-                total_abnormal_max = 0
-                total_abnormal_mean = 0
-                total_normal_max = 0
-                total_normal_mean = 0
-
-                if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                    total_TP = 0
-                    total_FN = 0
-                    total_FP = 0
-                    total_TN = 0
-                    total_preds = []
-                    total_gts = []
-
-                norm_valid_iter = iter(normal_valid_loader)
-                # iterator를 여기서 매번 새로 할당해줘야 iterator가 다시 처음부터 작동
-
-                for step, abnormal_inputs in tqdm(
-                    enumerate(abnormal_valid_loader), total=len(abnormal_valid_loader)
+                for step, (inputs, gts) in tqdm(
+                    enumerate(concat_valid_loader), total=len(concat_valid_loader)
                 ):
-                    try:
-                        normal_inputs = next(norm_valid_iter)
+                    inputs = inputs.to(device)
+                    # (val_batch_size, 11, 710)
+                    # gts = gts.to(device)
+                    # 이상영상이면 (val_batch_size, 176)
+                    # 정상영상이면 (val_batch_size, 11)
+                    if gts.size(1) == inputs.size(1):
+                        gts11 = gts.view(-1, 1).to(device)
+                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                    else:
+                        gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
+                        gts176 = gts
 
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-                        normal_input, normal_gt = normal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 12)
+                    pred = model(inputs)
+                    # pred는 (val_batch_size * 11, 1)
 
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
+                    val_loss = criterion(pred, gts11)
 
-                        inputs = torch.cat((abnormal_input, normal_input), dim=1)
-                        gts = torch.cat((abnormal_gt2, normal_gt), dim=1)
-                        # inputs는 (val_batch_size, 24, 710), gts는 (val_batch_size, 24)
+                    pred_view = pred.view(val_batch_size, inputs.size(1))
 
-                        # inputs = inputs.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 24, 710)
-                        inputs = inputs.to(device)
-                        gts = gts.view(-1, 1).to(device)
-                        # (val_batch_size * 24, 1)
+                    pred_max = torch.mean(torch.max(pred_view, dim=-1)[0])
 
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 24, 1)
+                    pred_mean = torch.mean(pred_view)
 
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
+                    pred_correct = pred > thr
+                    gts_correct = gts11 > thr
 
-                        val_MIL_loss = MIL_criterion(pred, val_batch_size, abnormal_input.size(1))
+                    pred_correct = pred_correct == gts_correct
+                    corrects = torch.sum(pred_correct).item()
 
-                        pred_a = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 0, :]
-                        pred_n = pred.view(val_batch_size, 2, abnormal_input.size(1))[:, 1, :]
+                    pred = (pred.squeeze()).detach().cpu().numpy()
+                    pred_np = np.zeros(gts176.size(1))
 
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-                        pred_n_max = torch.mean(torch.max(pred_n, dim=-1)[0])
+                    step = np.array([i for i in range(gts176.size(1) + 1)])
 
-                        pred_a_mean = torch.mean(pred_a)
-                        pred_n_mean = torch.mean(pred_n)
+                    for j in range(inputs.size(1)):
+                        pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
+                    gts176 = gts176.squeeze().detach().numpy()
 
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
+                    pred_positive = pred_np > thr
+                    TP_and_FN = pred_positive[gts176 > 0.9]
+                    FP_and_TN = pred_positive[gts176 < 0.1]
 
-                        pred = (pred.squeeze()).detach().cpu().numpy()
+                    num_TP = np.sum(TP_and_FN)
+                    num_FP = np.sum(FP_and_TN)
 
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-                        pred_normal_np = np.zeros(abnormal_gt.size(1))
+                    total_TP += num_TP
+                    total_FN += len(TP_and_FN) - num_TP
+                    total_FP += num_FP
+                    total_TN += len(FP_and_TN) - num_FP
 
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
+                    total_preds.append(pred_np)
+                    total_gts.append(gts176)
 
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-                            pred_normal_np[step[j] * 16 : step[j + 1] * 16] = pred[abnormal_input.size(1) + j]
+                    total_num_TRUE += len(TP_and_FN)
+                    total_num_FALSE += len(FP_and_TN)
+                    total_n_corrects += corrects / inputs.size(1)
 
-                        pred_np = np.concatenate((pred_abnormal_np, pred_normal_np), axis=0)
+                    total_loss += val_loss.item()
 
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        # normal_gt = np.zeros_like(abnormal_gt2)
-                        normal_gt = np.zeros_like(abnormal_gt)
-                        # gt_np = np.concatenate((abnormal_gt2, normal_gt), axis=0)
-                        gt_np = np.concatenate((abnormal_gt, normal_gt), axis=0)
+                    total_max += pred_max.item()
+                    total_mean += pred_mean.item()
 
-                        try:
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred_np)
-                            # auc = roc_auc_score(y_true=gt_np, y_score=pred)
+                val_mean_loss = total_loss / len(concat_valid_loader)
 
-                            fpr, tpr, cut = roc_curve(y_true=gt_np, y_score=pred_np)
-                            precision, recall, cut2 = precision_recall_curve(gt_np, pred_np)
+                val_tpr = total_TP / total_num_TRUE
+                val_fpr = total_FP / total_num_FALSE
 
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_np > thr
-                            TP_and_FN = pred_positive[gt_np > 0.9]
-                            FP_and_TN = pred_positive[gt_np < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_np)
-                                total_gts.append(gt_np)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_n_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_n_auc += auc
-                            total_n_ap += ap
-                            total_n_n_corrects += corrects / (abnormal_input.size(1) * 2)
-                            total_n_loss += val_loss.item()
-                            total_n_MIL_loss += val_MIL_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                            total_normal_max += pred_n_max.item()
-                            total_normal_mean += pred_n_mean.item()
-
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_n_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-                    except StopIteration:
-                        # if not use_extra:
-                        #     break
-                        abnormal_input, abnormal_gt = abnormal_inputs
-                        # (val_batch_size, 12, 710), (val_batch_size, 192)
-
-                        abnormal_gt2 = torch.max(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)[0]
-                        # abnormal_gt2 = torch.mean(abnormal_gt.view(-1, abnormal_input.size(1), 16), dim=2)
-                        # (val_batch_size, 12)
-
-                        # inputs = abnormal_input.view(-1, inputs.size(-1)).to(device)
-                        # (val_batch_size * 12, 710)
-                        inputs = abnormal_input.to(device)
-                        gts = abnormal_gt2.view(-1, 1).to(device)
-                        # (val_batch_size * 12, 1)
-
-                        pred = model(inputs)
-                        # pred는 (val_batch_size * 12, 1)
-
-                        val_loss = criterion(pred, gts)
-                        # if val_loss > 2:
-                        #     print(f"==>> pred: {pred}")
-                        #     print(f"==>> gts: {gts}")
-                        #     counter = patience + 1
-
-                        pred_a = pred.view(val_batch_size, abnormal_input.size(1))
-
-                        pred_a_max = torch.mean(torch.max(pred_a, dim=-1)[0])
-
-                        pred_a_mean = torch.mean(pred_a)
-
-                        pred_correct = pred > thr
-                        gts_correct = gts > thr
-
-                        pred_correct = pred_correct == gts_correct
-                        corrects = torch.sum(pred_correct).item()
-
-                        pred = (pred.squeeze()).detach().cpu().numpy()
-                        pred_abnormal_np = np.zeros(abnormal_gt.size(1))
-
-                        step = np.array([i for i in range(abnormal_input.size(1) + 1)])
-
-                        for j in range(abnormal_input.size(1)):
-                            pred_abnormal_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
-
-                        # abnormal_gt2 = abnormal_gt2.squeeze().detach().cpu().numpy()
-                        abnormal_gt = abnormal_gt.squeeze().detach().cpu().numpy()
-
-                        try:
-                            # auc = roc_auc_score(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            # auc = roc_auc_score(y_true=abnormal_gt2, y_score=pred)
-
-                            fpr, tpr, cut = roc_curve(y_true=abnormal_gt, y_score=pred_abnormal_np)
-                            precision, recall, cut2 = precision_recall_curve(abnormal_gt, pred_abnormal_np)
-
-                            auc = sklearn.metrics.auc(fpr, tpr)
-                            ap = sklearn.metrics.auc(recall, precision)
-
-                            diff = tpr - fpr
-                            diff_idx = np.argmax(diff)
-                            best_thr = cut[diff_idx]
-
-                            pred_positive = pred_abnormal_np > thr
-                            TP_and_FN = pred_positive[abnormal_gt > 0.9]
-                            FP_and_TN = pred_positive[abnormal_gt < 0.1]
-
-                            num_TP = np.sum(TP_and_FN)
-                            num_FP = np.sum(FP_and_TN)
-
-                            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-                                total_TP += num_TP
-                                total_FN += len(TP_and_FN) - num_TP
-                                total_FP += num_FP
-                                total_TN += len(FP_and_TN) - num_FP
-
-                                total_preds.append(pred_abnormal_np)
-                                total_gts.append(abnormal_gt)
-
-                            total_tpr += num_TP / len(TP_and_FN)
-                            total_fpr += num_FP / len(FP_and_TN)
-                            total_bthr += best_thr if diff_idx != 0 else 1
-
-                            total_auc += auc
-                            total_ap += ap
-                            total_n_corrects += corrects / abnormal_input.size(1)
-                            # normal + abnormal 24개와 다르게 abnormal 12개만 있음 -> /12 => 2/24
-                            total_loss += val_loss.item()
-
-                            total_abnormal_max += pred_a_max.item()
-                            total_abnormal_mean += pred_a_mean.item()
-                        except ValueError:
-                            # print(
-                            #     "ValueError: Only one class present in y_true. ROC AUC score is not defined in that case."
-                            # )
-                            # total_auc += 0
-                            error_count += 1
-                            # print("0~180 전부 0인 abnormal 영상 있음")
-
-                val_n_mean_loss = total_n_loss / (len(normal_valid_loader) - error_n_count)
-                val_n_mean_MIL_loss = total_n_MIL_loss / (len(normal_valid_loader) - error_n_count)
-
-                val_n_fpr = total_n_fpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_tpr = total_n_tpr / ((len(normal_valid_loader) - error_n_count))
-                val_n_bthr = total_n_bthr / ((len(normal_valid_loader) - error_n_count))
-                val_n_auc = total_n_auc / (len(normal_valid_loader) - error_n_count)
-                val_n_ap = total_n_ap / (len(normal_valid_loader) - error_n_count)
-
-                val_n_accuracy = total_n_n_corrects / ((len(normal_valid_loader) - error_n_count))
-
-                val_mean_loss = (total_loss + total_n_loss) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-
-                val_fpr = (total_fpr + total_n_fpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_tpr = (total_tpr + total_n_tpr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_bthr = (total_bthr + total_n_bthr) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_auc = (total_auc + total_n_auc) / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
-                val_ap = (total_ap + total_n_ap) / (len(abnormal_valid_loader) - error_n_count - error_count)
-                val_accuracy = (total_n_corrects + total_n_n_corrects) / (
-                    (len(abnormal_valid_loader) - error_n_count - error_count)
-                )
+                val_accuracy = total_n_corrects / len(concat_valid_loader)
                 # for loop 한번에 abnormal 12, normal 12해서 24개 정답 확인
 
-                val_mean_normal_max = total_normal_max / (len(normal_valid_loader) - error_n_count)
-                val_mean_normal_mean = total_normal_mean / (len(normal_valid_loader) - error_n_count)
-                val_mean_abnormal_max = total_abnormal_max / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
+                val_mean_max = total_max / len(concat_valid_loader)
+                val_mean_mean = total_mean / len(concat_valid_loader)
+
+            if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
+                conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
+                fig = plt.figure(figsize=(14, 7))
+                ax = fig.add_subplot(121, aspect=1)
+                sns.heatmap(
+                    conf_mtx,
+                    xticklabels=["Abnormal", "Normal"],
+                    yticklabels=["Abnormal", "Normal"],
+                    annot=True,
+                    fmt="d",
+                    ax=ax,
                 )
-                val_mean_abnormal_mean = total_abnormal_mean / (
-                    len(abnormal_valid_loader) - error_n_count - error_count
-                )
+                ax.set_title("Confusion matrix")
+                ax.set_xlabel("Preds")
+                ax.set_ylabel("GTs")
+
+                ax2 = fig.add_subplot(122, aspect=1)
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
+
+                ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {val_auc}")
+                ax2.plot([0, 1], [0, 1], linewidth=5)
+
+                ax2.set_xlim([-0.01, 1])
+                ax2.set_ylim([0, 1.01])
+                ax2.legend(loc="lower right")
+                ax2.set_title("ROC curve")
+                ax2.set_ylabel("True Positive Rate")
+                ax2.set_xlabel("False Positive Rate")
+
+                wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
+                # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
+
+                plt.clf()
+                plt.close()
+
+                # if epoch + 1 == max_epoch:
+                print("Drawing graphs...")
+                for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
+                    fig = plt.figure(figsize=(7, 7))
+                    ax = fig.add_subplot(111)
+                    ax.set_ylim([0, 1.01])
+                    ax.set_title(f"Video {i} score graph")
+                    ax.set_ylabel("Pred score")
+                    ax.set_xlabel("Segment")
+                    lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
+
+                    checker = np.concatenate((gt_g[1:], [0]))
+
+                    gt_indices = np.where(gt_g != checker)[0]
+
+                    for idx in range(len(gt_indices) // 2):
+
+                        ax.axvspan(
+                            gt_indices[2 * idx] + 0.5,
+                            gt_indices[2 * idx + 1] + 0.5,
+                            color="gray",
+                            linestyle="--",
+                            zorder=0,
+                            alpha=0.3,
+                        )
+
+                    ax.plot(lins, pred_g)
+
+                    if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
+                        os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
+
+                    plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
+
+                    plt.clf()
+                    plt.close()
+            else:
+                total_preds_np = np.concatenate(total_preds)
+                total_gts_np = np.concatenate(total_gts)
+
+                fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
+
+                diff = tpr - fpr
+                diff_idx = np.argmax(diff)
+                best_thr = cut[diff_idx]
+                val_bthr = best_thr if diff_idx != 0 else 1
+                # 무한대값 처리
+
+                precision, recall, cut2 = precision_recall_curve(total_gts_np, total_preds_np)
+
+                val_auc = sklearn.metrics.auc(fpr, tpr)
+                val_ap = sklearn.metrics.auc(recall, precision)
 
             if best_loss > val_mean_loss:
                 print(f"Best performance at epoch: {epoch + 1}, {best_loss:.4f} -> {val_mean_loss:.4f}")
@@ -2292,122 +1798,26 @@ def train3(
             "valid_auc": val_auc,
             "valid_ap": val_ap,
             "valid_accuracy": val_accuracy,
-            "valid_n_loss": val_n_mean_loss,
-            "valid_n_MIL_loss": val_n_mean_MIL_loss,
-            "valid_n_fpr": val_n_fpr,
-            "valid_n_tpr": val_n_tpr,
-            "valid_n_bthr": val_n_bthr,
-            "valid_n_auc": val_n_auc,
-            "valid_n_ap": val_n_ap,
-            "valid_n_accuracy": val_n_accuracy,
             "learning_rate": scheduler.get_last_lr()[0],
             "train_abnormal_max_mean": epoch_mean_abnormal_max,
             "train_abnormal_mean": epoch_mean_abnormal_mean,
             "train_normal_max_mean": epoch_mean_normal_max,
             "train_normal_mean": epoch_mean_normal_mean,
-            "valid_abnormal_max_mean": val_mean_abnormal_max,
-            "valid_abnormal_mean": val_mean_abnormal_mean,
-            "valid_normal_max_mean": val_mean_normal_max,
-            "valid_normal_mean": val_mean_normal_mean,
+            "valid_max_mean": val_mean_max,
+            "valid_mean": val_mean_mean,
         }
 
         wandb.log(new_wandb_metric_dict)
-
-        if epoch == 0 or (epoch + 1) % (100 * val_interval) == 0:
-            conf_mtx = np.array([[total_TP, total_FN], [total_FP, total_TN]])
-            fig = plt.figure(figsize=(14, 7))
-            ax = fig.add_subplot(121, aspect=1)
-            sns.heatmap(
-                conf_mtx,
-                xticklabels=["Abnormal", "Normal"],
-                yticklabels=["Abnormal", "Normal"],
-                annot=True,
-                fmt="d",
-                ax=ax,
-            )
-            ax.set_title("Confusion matrix")
-            ax.set_xlabel("Preds")
-            ax.set_ylabel("GTs")
-
-            ax2 = fig.add_subplot(122, aspect=1)
-            total_preds_np = np.concatenate(total_preds)
-            total_gts_np = np.concatenate(total_gts)
-
-            fpr, tpr, cut = roc_curve(y_true=total_gts_np, y_score=total_preds_np)
-
-            auc = sklearn.metrics.auc(fpr, tpr)
-
-            ax2.plot(fpr, tpr, linewidth=5, label=f"AUC = {auc}")
-            ax2.plot([0, 1], [0, 1], linewidth=5)
-
-            ax2.set_xlim([-0.01, 1])
-            ax2.set_ylim([0, 1.01])
-            ax2.legend(loc="lower right")
-            ax2.set_title("ROC curve")
-            ax2.set_ylabel("True Positive Rate")
-            ax2.set_xlabel("False Positive Rate")
-
-            wandb.log({f"Confusion matrix and ROC": wandb.Image(fig, caption=f"{epoch+1} epoch")})
-            # https://stackoverflow.com/questions/72134168/how-does-one-save-a-plot-in-wandb-with-wandb-log
-
-            plt.clf()
-            plt.close()
-
-            # if epoch + 1 == max_epoch:
-            print("Drawing graphs...")
-            for i, (pred_g, gt_g) in tqdm(enumerate(zip(total_preds, total_gts)), total=len(total_preds)):
-                fig = plt.figure(figsize=(7, 7))
-                ax = fig.add_subplot(111)
-                ax.set_ylim([0, 1.01])
-                ax.set_title(f"Video {i} score graph")
-                ax.set_ylabel("Pred score")
-                ax.set_xlabel("Frame")
-                lins = np.linspace(0, len(pred_g) - 1, len(pred_g))
-
-                checker = np.concatenate((gt_g[1:], [0]))
-
-                gt_indices = np.where(gt_g != checker)[0]
-
-                for idx in range(len(gt_indices) // 2):
-
-                    ax.axvspan(
-                        gt_indices[2 * idx] + 0.5,
-                        gt_indices[2 * idx + 1] + 0.5,
-                        color="gray",
-                        linestyle="--",
-                        zorder=0,
-                        alpha=0.3,
-                    )
-
-                ax.plot(lins, pred_g)
-
-                if not os.path.exists(f"./graphs/{wandb_run_name}/{epoch}/"):
-                    os.makedirs(f"./graphs/{wandb_run_name}/{epoch}/")
-
-                plt.savefig(f"./graphs/{wandb_run_name}/{epoch}/{i}.jpg", format="jpeg")
-
-                plt.clf()
-                plt.close()
 
         scheduler.step()
 
         epoch_end = datetime.now()
         epoch_time = epoch_end - epoch_start
         epoch_time = str(epoch_time).split(".")[0]
-        print(
-            f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)} valid_n_loss: {round(val_n_mean_loss,4)} valid_n_MIL_loss: {round(val_n_mean_MIL_loss,4)}"
-        )
-        print(f"valid_fpr: {val_fpr} valid_n_fpr: {val_n_fpr}")
-        print(f"valid_tpr: {val_tpr} valid_n_tpr: {val_n_tpr}")
-        print(f"valid_bthr: {val_bthr} valid_n_bthr: {val_n_bthr}")
-        print(
-            f"valid_auc: {val_auc:.4f} valid_n_auc: {val_n_auc:.4f}\nvalid_ap: {val_ap:.4f} valid_n_ap: {val_n_ap:.4f}\nvalid_accuracy: {val_accuracy:.2f} valid_n_accuracy: {val_n_accuracy:.2f}"
-        )
-        print(
-            f"==>> val_abnormal_max_mean: {val_mean_abnormal_max} val_abnormal_mean: {val_mean_abnormal_mean}"
-        )
-        print(f"==>> val_normal_max_mean: {val_mean_normal_max} val_normal_mean: {val_mean_normal_mean}")
-        print(f"==>> error_count: {error_count}")
+        print(f"==>> epoch {epoch+1} time: {epoch_time}\nvalid_loss: {round(val_mean_loss,4)}")
+        print(f"valid_tpr: {val_tpr} valid_fpr: {val_fpr} valid_bthr: {val_bthr}")
+        print(f"valid_auc: {val_auc:.4f} valid_ap: {val_ap:.4f} valid_accuracy: {val_accuracy:.2f}")
+        print(f"==>> val_max_mean: {val_mean_max} val_mean: {val_mean_mean}")
 
         if counter > patience:
             print("Early Stopping...")

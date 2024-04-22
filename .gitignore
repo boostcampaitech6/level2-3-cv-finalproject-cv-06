@@ -40,6 +40,7 @@ model_train/pytorch_model.pth
 model_train/nohup.out
 model_train/*.ipynb
 model_train/wandb
+model_train/graphs
 app/testitems/
 pths/
 app/models/pts
