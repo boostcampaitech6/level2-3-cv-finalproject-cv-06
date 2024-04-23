@@ -475,10 +475,10 @@ def train(
                     # 정상영상이면 (val_batch_size, 11)
                     if gts.size(1) == inputs.size(1):
                         gts11 = gts.view(-1, 1).to(device)
-                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                        gts176 = (torch.zeros(val_batch_size, gts.size(1) * 16)).to(device)
                     else:
                         gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
-                        gts176 = gts
+                        gts176 = gts.to(device)
 
                     pred = model(inputs)
                     # pred는 (val_batch_size * 11, 1)
@@ -500,16 +500,16 @@ def train(
                     pred = (pred.squeeze()).detach().cpu().numpy()
                     pred_np = np.zeros(gts176.size(1))
 
-                    step = np.array([i for i in range(gts176.size(1) + 1)])
+                    step = np.array([i for i in range(gts11.size(0) + 1)])
 
-                    for j in range(inputs.size(1)):
+                    for j in range(gts11.size(0)):
                         pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                    gts176 = gts176.squeeze().detach().numpy()
+                    gts176_np = (gts176.squeeze()).detach().cpu().numpy()
 
                     pred_positive = pred_np > thr
-                    TP_and_FN = pred_positive[gts176 > 0.9]
-                    FP_and_TN = pred_positive[gts176 < 0.1]
+                    TP_and_FN = pred_positive[gts176_np > 0.9]
+                    FP_and_TN = pred_positive[gts176_np < 0.1]
 
                     num_TP = np.sum(TP_and_FN)
                     num_FP = np.sum(FP_and_TN)
@@ -519,8 +519,8 @@ def train(
                     total_FP += num_FP
                     total_TN += len(FP_and_TN) - num_FP
 
-                    total_preds.append(pred_np)
-                    total_gts.append(gts176)
+                    total_preds.append(pred_np.copy())
+                    total_gts.append(gts176_np.copy())
 
                     total_num_TRUE += len(TP_and_FN)
                     total_num_FALSE += len(FP_and_TN)
@@ -1027,10 +1027,10 @@ def train2(
                     # 정상영상이면 (val_batch_size, 11)
                     if gts.size(1) == inputs.size(1):
                         gts11 = gts.view(-1, 1).to(device)
-                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                        gts176 = (torch.zeros(val_batch_size, gts.size(1) * 16)).to(device)
                     else:
                         gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
-                        gts176 = gts
+                        gts176 = gts.to(device)
 
                     pred = model(inputs)
                     # pred는 (val_batch_size * 11, 1)
@@ -1052,16 +1052,16 @@ def train2(
                     pred = (pred.squeeze()).detach().cpu().numpy()
                     pred_np = np.zeros(gts176.size(1))
 
-                    step = np.array([i for i in range(gts176.size(1) + 1)])
+                    step = np.array([i for i in range(gts11.size(0) + 1)])
 
-                    for j in range(inputs.size(1)):
+                    for j in range(gts11.size(0)):
                         pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                    gts176 = gts176.squeeze().detach().numpy()
+                    gts176_np = (gts176.squeeze()).detach().cpu().numpy()
 
                     pred_positive = pred_np > thr
-                    TP_and_FN = pred_positive[gts176 > 0.9]
-                    FP_and_TN = pred_positive[gts176 < 0.1]
+                    TP_and_FN = pred_positive[gts176_np > 0.9]
+                    FP_and_TN = pred_positive[gts176_np < 0.1]
 
                     num_TP = np.sum(TP_and_FN)
                     num_FP = np.sum(FP_and_TN)
@@ -1071,8 +1071,8 @@ def train2(
                     total_FP += num_FP
                     total_TN += len(FP_and_TN) - num_FP
 
-                    total_preds.append(pred_np)
-                    total_gts.append(gts176)
+                    total_preds.append(pred_np.copy())
+                    total_gts.append(gts176_np.copy())
 
                     total_num_TRUE += len(TP_and_FN)
                     total_num_FALSE += len(FP_and_TN)
@@ -1578,10 +1578,10 @@ def train3(
                     # 정상영상이면 (val_batch_size, 11)
                     if gts.size(1) == inputs.size(1):
                         gts11 = gts.view(-1, 1).to(device)
-                        gts176 = torch.zeros(val_batch_size, gts.size(1) * 16)
+                        gts176 = (torch.zeros(val_batch_size, gts.size(1) * 16)).to(device)
                     else:
                         gts11 = (torch.max(gts.view(-1, inputs.size(1), 16), dim=2)[0]).view(-1, 1).to(device)
-                        gts176 = gts
+                        gts176 = gts.to(device)
 
                     pred = model(inputs)
                     # pred는 (val_batch_size * 11, 1)
@@ -1603,16 +1603,16 @@ def train3(
                     pred = (pred.squeeze()).detach().cpu().numpy()
                     pred_np = np.zeros(gts176.size(1))
 
-                    step = np.array([i for i in range(gts176.size(1) + 1)])
+                    step = np.array([i for i in range(gts11.size(0) + 1)])
 
-                    for j in range(inputs.size(1)):
+                    for j in range(gts11.size(0)):
                         pred_np[step[j] * 16 : step[j + 1] * 16] = pred[j]
 
-                    gts176 = gts176.squeeze().detach().numpy()
+                    gts176_np = (gts176.squeeze()).detach().cpu().numpy()
 
                     pred_positive = pred_np > thr
-                    TP_and_FN = pred_positive[gts176 > 0.9]
-                    FP_and_TN = pred_positive[gts176 < 0.1]
+                    TP_and_FN = pred_positive[gts176_np > 0.9]
+                    FP_and_TN = pred_positive[gts176_np < 0.1]
 
                     num_TP = np.sum(TP_and_FN)
                     num_FP = np.sum(FP_and_TN)
@@ -1622,8 +1622,8 @@ def train3(
                     total_FP += num_FP
                     total_TN += len(FP_and_TN) - num_FP
 
-                    total_preds.append(pred_np)
-                    total_gts.append(gts176)
+                    total_preds.append(pred_np.copy())
+                    total_gts.append(gts176_np.copy())
 
                     total_num_TRUE += len(TP_and_FN)
                     total_num_FALSE += len(FP_and_TN)

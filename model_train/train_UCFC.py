@@ -499,8 +499,8 @@ def train_BNWVAD(
                     total_FP += num_FP
                     total_TN += len(FP_and_TN) - num_FP
 
-                    total_preds.append(pred_np)
-                    total_gts.append(gts_np)
+                    total_preds.append(pred_np.copy())
+                    total_gts.append(gts_np.copy())
 
                     total_num_TRUE += len(TP_and_FN)
                     total_num_FALSE += len(FP_and_TN)
@@ -1048,8 +1048,8 @@ def train_MIL(
                     total_FP += num_FP
                     total_TN += len(FP_and_TN) - num_FP
 
-                    total_preds.append(pred_np)
-                    total_gts.append(gts_np)
+                    total_preds.append(pred_np.copy())
+                    total_gts.append(gts_np.copy())
 
                     total_num_TRUE += len(TP_and_FN)
                     total_num_FALSE += len(FP_and_TN)
